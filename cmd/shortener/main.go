@@ -11,17 +11,19 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/qso808/URL_Shortening_Service_YP/internal/config"
 	"github.com/qso808/URL_Shortening_Service_YP/internal/handler"
 	"github.com/qso808/URL_Shortening_Service_YP/internal/repository"
 	"github.com/qso808/URL_Shortening_Service_YP/internal/service"
 )
 
-const (
-	defaultServerAddr = "localhost:8080"
-	defaultBaseURL    = "http://localhost:8080"
-)
-
 func main() {
+	// Загружаем конфигурацию из аргументов командной строки
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		log.Fatalf("Failed to load configuration: %v", err)
+	}
+
 	// Создаем репозиторий
 	repo := repository.NewMemoryRepository()
 
@@ -29,7 +31,7 @@ func main() {
 	shortenerService := service.NewShortenerService(repo)
 
 	// Создаем хэндлер
-	shortenerHandler := handler.NewShortenerHandler(shortenerService, defaultBaseURL)
+	shortenerHandler := handler.NewShortenerHandler(shortenerService, cfg.BaseURL)
 
 	// Настраиваем роутер с использованием chi
 	router := chi.NewRouter()
@@ -46,13 +48,14 @@ func main() {
 
 	// Создаем HTTP сервер
 	server := &http.Server{
-		Addr:    defaultServerAddr,
+		Addr:    cfg.ServerAddress,
 		Handler: router,
 	}
 
 	// Запускаем сервер в горутине
 	go func() {
-		log.Printf("Server starting on %s", defaultServerAddr)
+		log.Printf("Server starting on %s", cfg.ServerAddress)
+		log.Printf("Base URL: %s", cfg.BaseURL)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Server failed to start: %v", err)
 		}
