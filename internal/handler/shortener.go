@@ -9,12 +9,12 @@ import (
 
 // ShortenerHandler обрабатывает HTTP запросы для сервиса сокращения URL
 type ShortenerHandler struct {
-	service *service.ShortenerService
+	service service.Shortener
 	baseURL string
 }
 
 // NewShortenerHandler создает новый экземпляр хэндлера
-func NewShortenerHandler(svc *service.ShortenerService, baseURL string) *ShortenerHandler {
+func NewShortenerHandler(svc service.Shortener, baseURL string) *ShortenerHandler {
 	return &ShortenerHandler{
 		service: svc,
 		baseURL: baseURL,

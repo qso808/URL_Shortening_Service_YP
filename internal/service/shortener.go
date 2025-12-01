@@ -19,6 +19,12 @@ type Repository interface {
 	Get(id string) (string, error)
 }
 
+// Shortener определяет интерфейс сервиса сокращения URL
+type Shortener interface {
+	ShortenURL(longURL string) (string, error)
+	GetOriginalURL(shortID string) (string, error)
+}
+
 // NewShortenerService создает новый экземпляр сервиса
 func NewShortenerService(repo Repository) *ShortenerService {
 	return &ShortenerService{
