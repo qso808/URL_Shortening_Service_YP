@@ -9,6 +9,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
 	"github.com/qso808/URL_Shortening_Service_YP/internal/handler"
 	"github.com/qso808/URL_Shortening_Service_YP/internal/repository"
 	"github.com/qso808/URL_Shortening_Service_YP/internal/service"
@@ -29,22 +31,23 @@ func main() {
 	// Создаем хэндлер
 	shortenerHandler := handler.NewShortenerHandler(shortenerService, defaultBaseURL)
 
-	// Настраиваем роутер
-	mux := http.NewServeMux()
+	// Настраиваем роутер с использованием chi
+	router := chi.NewRouter()
+
+	// Добавляем middleware для логирования запросов
+	router.Use(middleware.Logger)
+	router.Use(middleware.Recoverer)
 
 	// POST / - сокращение URL
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/" {
-			shortenerHandler.ShortenURL(w, r)
-		} else {
-			shortenerHandler.Redirect(w, r)
-		}
-	})
+	router.Post("/", shortenerHandler.ShortenURL)
+
+	// GET /{id} - редирект на оригинальный URL
+	router.Get("/{id}", shortenerHandler.Redirect)
 
 	// Создаем HTTP сервер
 	server := &http.Server{
 		Addr:    defaultServerAddr,
-		Handler: mux,
+		Handler: router,
 	}
 
 	// Запускаем сервер в горутине

@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/qso808/URL_Shortening_Service_YP/internal/service"
 )
 
@@ -57,16 +58,22 @@ func (h *ShortenerHandler) ShortenURL(w http.ResponseWriter, r *http.Request) {
 
 // Redirect обрабатывает GET запрос для редиректа на оригинальный URL
 func (h *ShortenerHandler) Redirect(w http.ResponseWriter, r *http.Request) {
-	// Проверяем метод
+	// Проверяем метод (для обратной совместимости с тестами)
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	
-	// Извлекаем ID из пути (убираем ведущий слэш)
-	shortID := r.URL.Path
-	if len(shortID) > 0 && shortID[0] == '/' {
-		shortID = shortID[1:]
+	// Извлекаем ID из параметров роутера (chi)
+	shortID := chi.URLParam(r, "id")
+	
+	// Если ID не найден в параметрах (для обратной совместимости), пробуем извлечь из пути
+	if shortID == "" {
+		path := r.URL.Path
+		if len(path) > 0 && path[0] == '/' {
+			path = path[1:]
+		}
+		shortID = path
 	}
 	
 	// Получаем оригинальный URL
