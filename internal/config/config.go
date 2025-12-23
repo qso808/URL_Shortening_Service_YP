@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"net/url"
+	"os"
 )
 
 // Config содержит конфигурацию приложения
@@ -15,18 +16,39 @@ type Config struct {
 	BaseURL string
 }
 
-// LoadConfig загружает конфигурацию из аргументов командной строки
+// LoadConfig загружает конфигурацию с приоритетом:
+// 1. Переменная окружения (если указана)
+// 2. Аргумент командной строки (флаг) (если указан)
+// 3. Значение по умолчанию
 // Возвращает ошибку, если конфигурация некорректна
 func LoadConfig() (*Config, error) {
+	// Значения по умолчанию
+	defaultServerAddr := "localhost:8080"
+	defaultBaseURL := "http://localhost:8080"
+	
 	var serverAddr string
 	var baseURL string
 	
 	// Определяем флаги командной строки
-	flag.StringVar(&serverAddr, "a", "localhost:8080", "адрес запуска HTTP-сервера")
-	flag.StringVar(&baseURL, "b", "http://localhost:8080", "базовый адрес результирующего сокращённого URL")
+	flag.StringVar(&serverAddr, "a", defaultServerAddr, "адрес запуска HTTP-сервера")
+	flag.StringVar(&baseURL, "b", defaultBaseURL, "базовый адрес результирующего сокращённого URL")
 	
 	// Парсим аргументы командной строки
 	flag.Parse()
+	
+	// Приоритет 1: Проверяем переменные окружения
+	// Если переменная окружения установлена, используем её
+	if envServerAddr := os.Getenv("SERVER_ADDRESS"); envServerAddr != "" {
+		serverAddr = envServerAddr
+	}
+	
+	if envBaseURL := os.Getenv("BASE_URL"); envBaseURL != "" {
+		baseURL = envBaseURL
+	}
+	
+	// Приоритет 2: Если переменная окружения не установлена,
+	// используется значение из флага командной строки (или значение по умолчанию)
+	// Это уже обработано выше через flag.StringVar
 	
 	// Создаем конфигурацию
 	cfg := &Config{
@@ -70,4 +92,5 @@ func (c *Config) Validate() error {
 	
 	return nil
 }
+
 
