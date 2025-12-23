@@ -13,8 +13,10 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/qso808/URL_Shortening_Service_YP/internal/config"
 	"github.com/qso808/URL_Shortening_Service_YP/internal/handler"
+	customMiddleware "github.com/qso808/URL_Shortening_Service_YP/internal/middleware"
 	"github.com/qso808/URL_Shortening_Service_YP/internal/repository"
 	"github.com/qso808/URL_Shortening_Service_YP/internal/service"
+	"github.com/rs/zerolog"
 )
 
 func main() {
@@ -33,11 +35,14 @@ func main() {
 	// Создаем хэндлер
 	shortenerHandler := handler.NewShortenerHandler(shortenerService, cfg.BaseURL)
 
+	// Инициализируем logger zerolog на уровне Info
+	logger := zerolog.New(os.Stdout).With().Timestamp().Logger().Level(zerolog.InfoLevel)
+
 	// Настраиваем роутер с использованием chi
 	router := chi.NewRouter()
 
-	// Добавляем middleware для логирования запросов
-	router.Use(middleware.Logger)
+	// Добавляем кастомный middleware для логирования запросов и ответов
+	router.Use(customMiddleware.RequestLogger(logger))
 	router.Use(middleware.Recoverer)
 
 	// POST / - сокращение URL
