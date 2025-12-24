@@ -17,11 +17,17 @@ func GzipMiddleware(next http.Handler) http.Handler {
 		if strings.Contains(r.Header.Get("Content-Encoding"), "gzip") {
 			gzReader, err := gzip.NewReader(r.Body)
 			if err != nil {
+				// Если ошибка при создании gzip reader, возвращаем ошибку
 				http.Error(w, "Bad Request: invalid gzip data", http.StatusBadRequest)
 				return
 			}
-			defer gzReader.Close()
+			
+			// Заменяем тело запроса на декомпрессированный reader
 			r.Body = io.NopCloser(gzReader)
+			// Удаляем заголовок Content-Encoding, так как тело уже декомпрессировано
+			r.Header.Del("Content-Encoding")
+			// Удаляем Content-Length, так как размер изменился после декомпрессии
+			r.Header.Del("Content-Length")
 		}
 
 		// Проверяем, поддерживает ли клиент gzip
@@ -62,8 +68,11 @@ func (w *gzipResponseWriter) WriteHeader(code int) {
 		// Получаем Content-Type из заголовков
 		contentType := w.Header().Get("Content-Type")
 
+		// Не сжимаем ошибки (коды 4xx и 5xx) и text/plain (обычно используется для ошибок)
 		// Проверяем, нужно ли сжимать ответ
-		shouldCompress := w.acceptsGzip &&
+		shouldCompress := code >= 200 && code < 300 &&
+			w.acceptsGzip &&
+			contentType != "text/plain" &&
 			(strings.Contains(contentType, "application/json") ||
 				strings.Contains(contentType, "text/html"))
 
@@ -85,8 +94,10 @@ func (w *gzipResponseWriter) Write(b []byte) (int, error) {
 		// Получаем Content-Type из заголовков
 		contentType := w.Header().Get("Content-Type")
 
+		// Не сжимаем text/plain (обычно используется для ошибок)
 		// Проверяем, нужно ли сжимать ответ
 		shouldCompress := w.acceptsGzip &&
+			contentType != "text/plain" &&
 			(strings.Contains(contentType, "application/json") ||
 				strings.Contains(contentType, "text/html"))
 
