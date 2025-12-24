@@ -41,6 +41,9 @@ func main() {
 	// Настраиваем роутер с использованием chi
 	router := chi.NewRouter()
 
+	// Добавляем middleware для поддержки gzip (должен быть первым для обработки запросов/ответов)
+	router.Use(customMiddleware.GzipMiddleware)
+
 	// Добавляем кастомный middleware для логирования запросов и ответов
 	router.Use(customMiddleware.RequestLogger(logger))
 	router.Use(middleware.Recoverer)
