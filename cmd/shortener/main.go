@@ -27,7 +27,20 @@ func main() {
 	}
 
 	// Создаем репозиторий
-	repo := repository.NewMemoryRepository()
+	var repo repository.Repository
+	if cfg.FileStoragePath != "" {
+		// Используем файловый репозиторий, если указан путь к файлу
+		fileRepo, err := repository.NewFileRepository(cfg.FileStoragePath)
+		if err != nil {
+			log.Fatalf("Failed to create file repository: %v", err)
+		}
+		repo = fileRepo
+		log.Printf("Using file storage: %s", cfg.FileStoragePath)
+	} else {
+		// Используем in-memory репозиторий, если путь к файлу не указан
+		repo = repository.NewMemoryRepository()
+		log.Println("Using in-memory storage")
+	}
 
 	// Создаем сервис
 	shortenerService := service.NewShortenerService(repo)
