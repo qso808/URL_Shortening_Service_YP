@@ -28,32 +28,22 @@ func main() {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}
 
-	// Создаем репозиторий
+	// Создаем репозиторий с fallback механизмом:
+	// 1. PostgreSQL (если указан DATABASE_DSN)
+	// 2. Файл (если указан FileStoragePath)
+	// 3. Память (по умолчанию)
 	var repo repository.Repository
-	if cfg.FileStoragePath != "" {
-		// Используем файловый репозиторий, если указан путь к файлу
-		fileRepo, err := repository.NewFileRepository(cfg.FileStoragePath)
-		if err != nil {
-			log.Fatalf("Failed to create file repository: %v", err)
-		}
-		repo = fileRepo
-		log.Printf("Using file storage: %s", cfg.FileStoragePath)
-	} else {
-		// Используем in-memory репозиторий, если путь к файлу не указан
-		repo = repository.NewMemoryRepository()
-		log.Println("Using in-memory storage")
-	}
-
-	// Создаем сервис
-	shortenerService := service.NewShortenerService(repo)
-
-	// Создаем хэндлер
-	shortenerHandler := handler.NewShortenerHandler(shortenerService, cfg.BaseURL)
-
-	// Подключаемся к базе данных, если указан DATABASE_DSN
 	var db *sql.DB
+
 	if cfg.DatabaseDSN != "" {
-		var err error
+		// Приоритет 1: PostgreSQL
+		postgresRepo, err := repository.NewPostgresRepository(cfg.DatabaseDSN)
+		if err != nil {
+			log.Fatalf("Failed to create PostgreSQL repository: %v", err)
+		}
+		repo = postgresRepo
+
+		// Открываем соединение для /ping хендлера
 		db, err = sql.Open("postgres", cfg.DatabaseDSN)
 		if err != nil {
 			log.Fatalf("Failed to connect to database: %v", err)
@@ -64,8 +54,26 @@ func main() {
 		if err := db.Ping(); err != nil {
 			log.Fatalf("Failed to ping database: %v", err)
 		}
-		log.Println("Database connection established")
+		log.Println("Using PostgreSQL storage")
+	} else if cfg.FileStoragePath != "" {
+		// Приоритет 2: Файл
+		fileRepo, err := repository.NewFileRepository(cfg.FileStoragePath)
+		if err != nil {
+			log.Fatalf("Failed to create file repository: %v", err)
+		}
+		repo = fileRepo
+		log.Printf("Using file storage: %s", cfg.FileStoragePath)
+	} else {
+		// Приоритет 3: Память
+		repo = repository.NewMemoryRepository()
+		log.Println("Using in-memory storage")
 	}
+
+	// Создаем сервис
+	shortenerService := service.NewShortenerService(repo)
+
+	// Создаем хэндлер
+	shortenerHandler := handler.NewShortenerHandler(shortenerService, cfg.BaseURL)
 
 	// Инициализируем logger zerolog на уровне Info
 	logger := zerolog.New(os.Stdout).With().Timestamp().Logger().Level(zerolog.InfoLevel)
@@ -121,6 +129,15 @@ func main() {
 
 	if err := server.Shutdown(ctx); err != nil {
 		log.Fatalf("Server forced to shutdown: %v", err)
+	}
+
+	// Закрываем соединение с PostgreSQL, если оно было открыто
+	if cfg.DatabaseDSN != "" {
+		if postgresRepo, ok := repo.(*repository.PostgresRepository); ok {
+			if err := postgresRepo.Close(); err != nil {
+				log.Printf("Error closing PostgreSQL connection: %v", err)
+			}
+		}
 	}
 
 	log.Println("Server exited")
