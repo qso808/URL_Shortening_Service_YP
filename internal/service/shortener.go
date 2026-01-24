@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"net/url"
 	"strings"
 )
@@ -23,6 +24,7 @@ type Repository interface {
 type Shortener interface {
 	ShortenURL(longURL string) (string, error)
 	GetOriginalURL(shortID string) (string, error)
+	ShortenURLBatch(urls map[string]string) (map[string]string, error)
 }
 
 // NewShortenerService создает новый экземпляр сервиса
@@ -99,5 +101,65 @@ func (s *ShortenerService) generateShortID() string {
 	}
 	
 	return encoded
+}
+
+// ShortenURLBatch создает короткие идентификаторы для множества URL
+// Принимает map[correlationID]originalURL и возвращает map[correlationID]shortID
+func (s *ShortenerService) ShortenURLBatch(urls map[string]string) (map[string]string, error) {
+	if len(urls) == 0 {
+		return nil, errors.New("empty batch")
+	}
+
+	result := make(map[string]string, len(urls))
+
+	// Валидируем и генерируем ID для всех URL
+	type urlData struct {
+		correlationID string
+		originalURL   string
+		shortID       string
+	}
+
+	urlsToSave := make([]urlData, 0, len(urls))
+	for correlationID, originalURL := range urls {
+		// Валидация URL
+		if err := s.validateURL(originalURL); err != nil {
+			return nil, fmt.Errorf("invalid URL for correlation_id %s: %w", correlationID, err)
+		}
+
+		// Генерируем уникальный короткий ID
+		shortID := s.generateShortID()
+		result[correlationID] = shortID
+
+		urlsToSave = append(urlsToSave, urlData{
+			correlationID: correlationID,
+			originalURL:   originalURL,
+			shortID:       shortID,
+		})
+	}
+
+	// Сохраняем все URL в репозиторий
+	// Для PostgreSQL используем batch сохранение в транзакции
+	// Для других репозиториев используем обычный Save
+	if batchRepo, ok := s.repo.(interface {
+		SaveBatch(mappings map[string]string) error
+	}); ok {
+		// Используем batch сохранение
+		batchMappings := make(map[string]string, len(urlsToSave))
+		for _, data := range urlsToSave {
+			batchMappings[data.shortID] = data.originalURL
+		}
+		if err := batchRepo.SaveBatch(batchMappings); err != nil {
+			return nil, fmt.Errorf("failed to save batch: %w", err)
+		}
+	} else {
+		// Используем обычный Save для каждого URL
+		for _, data := range urlsToSave {
+			if err := s.repo.Save(data.shortID, data.originalURL); err != nil {
+				return nil, fmt.Errorf("failed to save URL for correlation_id %s: %w", data.correlationID, err)
+			}
+		}
+	}
+
+	return result, nil
 }
 

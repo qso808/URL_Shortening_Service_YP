@@ -77,6 +77,45 @@ func (r *PostgresRepository) Save(id string, originalURL string) error {
 	return nil
 }
 
+// SaveBatch сохраняет множество URL в одной транзакции
+func (r *PostgresRepository) SaveBatch(mappings map[string]string) error {
+	if len(mappings) == 0 {
+		return nil
+	}
+
+	// Начинаем транзакцию
+	tx, err := r.db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Подготавливаем statement
+	stmt, err := tx.Prepare(`
+		INSERT INTO url_mappings (short_url, original_url)
+		VALUES ($1, $2)
+		ON CONFLICT (short_url) DO UPDATE SET original_url = EXCLUDED.original_url
+	`)
+	if err != nil {
+		return fmt.Errorf("failed to prepare statement: %w", err)
+	}
+	defer stmt.Close()
+
+	// Выполняем вставки
+	for shortID, originalURL := range mappings {
+		if _, err := stmt.Exec(shortID, originalURL); err != nil {
+			return fmt.Errorf("failed to save URL %s: %w", shortID, err)
+		}
+	}
+
+	// Коммитим транзакцию
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	return nil
+}
+
 // Get возвращает оригинальный URL по короткому ID
 func (r *PostgresRepository) Get(id string) (string, error) {
 	query := `

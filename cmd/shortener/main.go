@@ -98,6 +98,9 @@ func main() {
 	// POST /api/shorten - сокращение URL (JSON)
 	router.Post("/api/shorten", shortenerHandler.ShortenURLJSON)
 
+	// POST /api/shorten/batch - пакетное сокращение URL (JSON)
+	router.Post("/api/shorten/batch", shortenerHandler.ShortenURLBatch)
+
 	// GET /{id} - редирект на оригинальный URL
 	router.Get("/{id}", shortenerHandler.Redirect)
 

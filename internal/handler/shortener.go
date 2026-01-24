@@ -19,6 +19,18 @@ type ShortenResponse struct {
 	Result string `json:"result"`
 }
 
+// BatchShortenRequest представляет структуру одного элемента в batch запросе
+type BatchShortenRequest struct {
+	CorrelationID string `json:"correlation_id"`
+	OriginalURL   string `json:"original_url"`
+}
+
+// BatchShortenResponse представляет структуру одного элемента в batch ответе
+type BatchShortenResponse struct {
+	CorrelationID string `json:"correlation_id"`
+	ShortURL      string `json:"short_url"`
+}
+
 // ShortenerHandler обрабатывает HTTP запросы для сервиса сокращения URL
 type ShortenerHandler struct {
 	service service.Shortener
@@ -155,6 +167,84 @@ func (h *ShortenerHandler) ShortenURLJSON(w http.ResponseWriter, r *http.Request
 
 	// Кодируем и отправляем JSON ответ
 	if err := json.NewEncoder(w).Encode(response); err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+}
+
+// ShortenURLBatch обрабатывает POST запрос /api/shorten/batch для пакетного сокращения URL
+func (h *ShortenerHandler) ShortenURLBatch(w http.ResponseWriter, r *http.Request) {
+	// Проверяем метод
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Проверяем Content-Type
+	if r.Header.Get("Content-Type") != "application/json" {
+		http.Error(w, "Content-Type must be application/json", http.StatusBadRequest)
+		return
+	}
+
+	// Читаем тело запроса
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "Bad Request", http.StatusBadRequest)
+		return
+	}
+	defer r.Body.Close()
+
+	// Парсим JSON запрос
+	var requests []BatchShortenRequest
+	if err := json.Unmarshal(body, &requests); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	// Проверяем, что batch не пустой
+	if len(requests) == 0 {
+		http.Error(w, "Empty batch", http.StatusBadRequest)
+		return
+	}
+
+	// Преобразуем запросы в map для сервиса
+	urlsMap := make(map[string]string, len(requests))
+	for _, req := range requests {
+		if req.CorrelationID == "" {
+			http.Error(w, "correlation_id is required", http.StatusBadRequest)
+			return
+		}
+		urlsMap[req.CorrelationID] = req.OriginalURL
+	}
+
+	// Вызываем сервис для batch сокращения
+	results, err := h.service.ShortenURLBatch(urlsMap)
+	if err != nil {
+		http.Error(w, "Bad Request", http.StatusBadRequest)
+		return
+	}
+
+	// Формируем ответ в том же порядке, что и запрос
+	responses := make([]BatchShortenResponse, 0, len(requests))
+	for _, req := range requests {
+		shortID, exists := results[req.CorrelationID]
+		if !exists {
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
+		shortURL := h.baseURL + "/" + shortID
+		responses = append(responses, BatchShortenResponse{
+			CorrelationID: req.CorrelationID,
+			ShortURL:      shortURL,
+		})
+	}
+
+	// Устанавливаем заголовки
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+
+	// Кодируем и отправляем JSON ответ
+	if err := json.NewEncoder(w).Encode(responses); err != nil {
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
