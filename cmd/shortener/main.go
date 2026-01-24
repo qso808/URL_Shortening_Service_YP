@@ -45,8 +45,11 @@ func main() {
 	router.Use(customMiddleware.RequestLogger(logger))
 	router.Use(middleware.Recoverer)
 
-	// POST / - сокращение URL
+	// POST / - сокращение URL (text/plain)
 	router.Post("/", shortenerHandler.ShortenURL)
+
+	// POST /api/shorten - сокращение URL (JSON)
+	router.Post("/api/shorten", shortenerHandler.ShortenURLJSON)
 
 	// GET /{id} - редирект на оригинальный URL
 	router.Get("/{id}", shortenerHandler.Redirect)

@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -234,6 +235,141 @@ func TestShortenerHandler_Redirect(t *testing.T) {
 				location := rr.Header().Get("Location")
 				if location != tt.expectedLocation {
 					t.Errorf("expected Location %q, got %q", tt.expectedLocation, location)
+				}
+			}
+		})
+	}
+}
+
+func TestShortenerHandler_ShortenURLJSON(t *testing.T) {
+	baseURL := "http://localhost:8080"
+
+	tests := []struct {
+		name           string
+		method         string
+		contentType    string
+		body           string
+		mockService    *mockShortenerService
+		expectedStatus int
+		expectedBody   *ShortenResponse
+		expectedHeader string
+	}{
+		{
+			name:        "успешное сокращение URL через JSON",
+			method:      http.MethodPost,
+			contentType: "application/json",
+			body:        `{"url":"https://practicum.yandex.ru"}`,
+			mockService: &mockShortenerService{
+				shortenURLResult: "EwHXdJfB",
+			},
+			expectedStatus: http.StatusCreated,
+			expectedBody: &ShortenResponse{
+				Result: "http://localhost:8080/EwHXdJfB",
+			},
+			expectedHeader: "application/json",
+		},
+		{
+			name:           "неправильный метод - GET",
+			method:         http.MethodGet,
+			contentType:    "application/json",
+			body:           `{"url":"https://practicum.yandex.ru"}`,
+			mockService:    &mockShortenerService{},
+			expectedStatus: http.StatusMethodNotAllowed,
+		},
+		{
+			name:           "неправильный Content-Type",
+			method:         http.MethodPost,
+			contentType:    "text/plain",
+			body:           `{"url":"https://practicum.yandex.ru"}`,
+			mockService:    &mockShortenerService{},
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name:           "невалидный JSON",
+			method:         http.MethodPost,
+			contentType:    "application/json",
+			body:           `{"url":}`,
+			mockService:    &mockShortenerService{},
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name:           "пустой URL в JSON",
+			method:         http.MethodPost,
+			contentType:    "application/json",
+			body:           `{"url":""}`,
+			mockService:    &mockShortenerService{},
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name:        "отсутствует поле url в JSON",
+			method:      http.MethodPost,
+			contentType: "application/json",
+			body:        `{}`,
+			mockService: &mockShortenerService{},
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name:        "ошибка валидации URL в сервисе",
+			method:      http.MethodPost,
+			contentType: "application/json",
+			body:        `{"url":"invalid-url"}`,
+			mockService: &mockShortenerService{
+				shortenURLErr: errors.New("invalid URL"),
+			},
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name:        "ошибка сохранения в репозитории",
+			method:      http.MethodPost,
+			contentType: "application/json",
+			body:        `{"url":"https://practicum.yandex.ru"}`,
+			mockService: &mockShortenerService{
+				shortenURLErr: errors.New("save error"),
+			},
+			expectedStatus: http.StatusBadRequest,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Создаем handler с мок-сервисом
+			handler := &ShortenerHandler{
+				service: tt.mockService,
+				baseURL: baseURL,
+			}
+
+			// Создаем запрос
+			req := httptest.NewRequest(tt.method, "/api/shorten", bytes.NewBufferString(tt.body))
+			req.Header.Set("Content-Type", tt.contentType)
+
+			// Создаем ResponseRecorder для записи ответа
+			rr := httptest.NewRecorder()
+
+			// Вызываем handler
+			handler.ShortenURLJSON(rr, req)
+
+			// Проверяем статус код
+			if rr.Code != tt.expectedStatus {
+				t.Errorf("expected status %d, got %d", tt.expectedStatus, rr.Code)
+			}
+
+			// Проверяем тело ответа для успешного случая
+			if tt.expectedStatus == http.StatusCreated {
+				// Проверяем Content-Type
+				if rr.Header().Get("Content-Type") != tt.expectedHeader {
+					t.Errorf("expected Content-Type %q, got %q", tt.expectedHeader, rr.Header().Get("Content-Type"))
+				}
+
+				// Парсим JSON ответ
+				var response ShortenResponse
+				if err := json.NewDecoder(rr.Body).Decode(&response); err != nil {
+					t.Errorf("failed to decode JSON response: %v", err)
+					return
+				}
+
+				// Проверяем результат
+				if response.Result != tt.expectedBody.Result {
+					t.Errorf("expected result %q, got %q", tt.expectedBody.Result, response.Result)
 				}
 			}
 		})
