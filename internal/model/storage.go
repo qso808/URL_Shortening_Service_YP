@@ -7,3 +7,4 @@ type StorageRecord struct {
 	OriginalURL string `json:"original_url"`
 }
 
+

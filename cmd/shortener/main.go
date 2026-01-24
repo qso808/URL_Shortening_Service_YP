@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"log"
 	"net/http"
 	"os"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	_ "github.com/lib/pq"
 	"github.com/qso808/URL_Shortening_Service_YP/internal/config"
 	"github.com/qso808/URL_Shortening_Service_YP/internal/handler"
 	customMiddleware "github.com/qso808/URL_Shortening_Service_YP/internal/middleware"
@@ -48,6 +50,23 @@ func main() {
 	// Создаем хэндлер
 	shortenerHandler := handler.NewShortenerHandler(shortenerService, cfg.BaseURL)
 
+	// Подключаемся к базе данных, если указан DATABASE_DSN
+	var db *sql.DB
+	if cfg.DatabaseDSN != "" {
+		var err error
+		db, err = sql.Open("postgres", cfg.DatabaseDSN)
+		if err != nil {
+			log.Fatalf("Failed to connect to database: %v", err)
+		}
+		defer db.Close()
+
+		// Проверяем соединение
+		if err := db.Ping(); err != nil {
+			log.Fatalf("Failed to ping database: %v", err)
+		}
+		log.Println("Database connection established")
+	}
+
 	// Инициализируем logger zerolog на уровне Info
 	logger := zerolog.New(os.Stdout).With().Timestamp().Logger().Level(zerolog.InfoLevel)
 
@@ -60,6 +79,10 @@ func main() {
 	// Добавляем кастомный middleware для логирования запросов и ответов
 	router.Use(customMiddleware.RequestLogger(logger))
 	router.Use(middleware.Recoverer)
+
+	// GET /ping - проверка соединения с базой данных
+	pingHandler := handler.NewPingHandler(db)
+	router.Get("/ping", pingHandler.Ping)
 
 	// POST / - сокращение URL (text/plain)
 	router.Post("/", shortenerHandler.ShortenURL)
