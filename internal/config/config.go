@@ -17,6 +17,9 @@ type Config struct {
 	
 	// FileStoragePath путь к файлу для сохранения данных (опционально)
 	FileStoragePath string
+	
+	// DatabaseDSN строка подключения к базе данных PostgreSQL (опционально)
+	DatabaseDSN string
 }
 
 // LoadConfig загружает конфигурацию с приоритетом:
@@ -32,11 +35,13 @@ func LoadConfig() (*Config, error) {
 	var serverAddr string
 	var baseURL string
 	var fileStoragePath string
+	var databaseDSN string
 	
 	// Определяем флаги командной строки
 	flag.StringVar(&serverAddr, "a", defaultServerAddr, "адрес запуска HTTP-сервера")
 	flag.StringVar(&baseURL, "b", defaultBaseURL, "базовый адрес результирующего сокращённого URL")
 	flag.StringVar(&fileStoragePath, "f", "", "путь к файлу для сохранения данных")
+	flag.StringVar(&databaseDSN, "d", "", "строка подключения к базе данных PostgreSQL")
 	
 	// Парсим аргументы командной строки
 	flag.Parse()
@@ -55,6 +60,10 @@ func LoadConfig() (*Config, error) {
 		fileStoragePath = envFileStoragePath
 	}
 	
+	if envDatabaseDSN := os.Getenv("DATABASE_DSN"); envDatabaseDSN != "" {
+		databaseDSN = envDatabaseDSN
+	}
+	
 	// Приоритет 2: Если переменная окружения не установлена,
 	// используется значение из флага командной строки (или значение по умолчанию)
 	// Это уже обработано выше через flag.StringVar
@@ -64,6 +73,7 @@ func LoadConfig() (*Config, error) {
 		ServerAddress:   serverAddr,
 		BaseURL:         baseURL,
 		FileStoragePath: fileStoragePath,
+		DatabaseDSN:     databaseDSN,
 	}
 	
 	// Валидируем конфигурацию
