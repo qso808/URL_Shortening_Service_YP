@@ -162,4 +162,3 @@ func (s *ShortenerService) ShortenURLBatch(urls map[string]string) (map[string]s
 
 	return result, nil
 }
-

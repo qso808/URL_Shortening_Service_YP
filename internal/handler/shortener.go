@@ -249,4 +249,3 @@ func (h *ShortenerHandler) ShortenURLBatch(w http.ResponseWriter, r *http.Reques
 		return
 	}
 }
-

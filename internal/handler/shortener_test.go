@@ -32,6 +32,17 @@ func (m *mockShortenerService) GetOriginalURL(shortID string) (string, error) {
 	return m.getOriginalURLResult, nil
 }
 
+func (m *mockShortenerService) ShortenURLBatch(urls map[string]string) (map[string]string, error) {
+	if m.shortenURLErr != nil {
+		return nil, m.shortenURLErr
+	}
+	result := make(map[string]string, len(urls))
+	for cid := range urls {
+		result[cid] = "batch_" + cid
+	}
+	return result, nil
+}
+
 func TestShortenerHandler_ShortenURL(t *testing.T) {
 	baseURL := "http://localhost:8080"
 	
