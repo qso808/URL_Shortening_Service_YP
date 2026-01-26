@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/jackc/pgerrcode"
+	"github.com/lib/pq"
 	_ "github.com/lib/pq"
 )
 
@@ -52,6 +54,7 @@ func (r *PostgresRepository) migrate() error {
 		);
 		
 		CREATE INDEX IF NOT EXISTS idx_short_url ON url_mappings(short_url);
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_original_url ON url_mappings(original_url);
 	`
 
 	if _, err := r.db.Exec(createTableSQL); err != nil {
@@ -60,6 +63,9 @@ func (r *PostgresRepository) migrate() error {
 
 	return nil
 }
+
+// ErrDuplicateURL - ошибка, возникающая при попытке сохранить уже существующий URL
+var ErrDuplicateURL = errors.New("duplicate URL")
 
 // Save сохраняет связь между коротким ID и оригинальным URL
 func (r *PostgresRepository) Save(id string, originalURL string) error {
@@ -71,6 +77,18 @@ func (r *PostgresRepository) Save(id string, originalURL string) error {
 
 	_, err := r.db.Exec(query, id, originalURL)
 	if err != nil {
+		// Проверяем, является ли ошибка нарушением уникального ограничения на original_url
+		if pqErr, ok := err.(*pq.Error); ok {
+			if pqErr.Code == pgerrcode.UniqueViolation {
+				// Проверяем, какое именно ограничение было нарушено
+				// Может быть idx_original_url (наш индекс) или автоматически сгенерированное имя
+				if pqErr.Constraint == "idx_original_url" || 
+				   pqErr.Constraint == "url_mappings_original_url_key" ||
+				   (pqErr.Column == "original_url" && pqErr.Table == "url_mappings") {
+					return ErrDuplicateURL
+				}
+			}
+		}
 		return fmt.Errorf("failed to save URL: %w", err)
 	}
 
@@ -134,6 +152,26 @@ func (r *PostgresRepository) Get(id string) (string, error) {
 	}
 
 	return originalURL, nil
+}
+
+// GetByOriginalURL возвращает короткий ID по оригинальному URL
+func (r *PostgresRepository) GetByOriginalURL(originalURL string) (string, error) {
+	query := `
+		SELECT short_url
+		FROM url_mappings
+		WHERE original_url = $1
+	`
+
+	var shortURL string
+	err := r.db.QueryRow(query, originalURL).Scan(&shortURL)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return "", errors.New("URL not found")
+		}
+		return "", fmt.Errorf("failed to get URL: %w", err)
+	}
+
+	return shortURL, nil
 }
 
 // Close закрывает соединение с базой данных
