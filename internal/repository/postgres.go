@@ -7,7 +7,6 @@ import (
 
 	"github.com/jackc/pgerrcode"
 	"github.com/lib/pq"
-	_ "github.com/lib/pq"
 )
 
 // PostgresRepository - PostgreSQL реализация репозитория
