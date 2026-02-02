@@ -2,23 +2,28 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/qso808/URL_Shortening_Service_YP/internal/middleware"
+	"github.com/qso808/URL_Shortening_Service_YP/internal/repository"
 )
 
 // mockShortenerService - мок для тестирования handlers
-// Реализует интерфейс service.Shortener
 type mockShortenerService struct {
-	shortenURLErr         error
-	shortenURLResult      string
-	getOriginalURLErr     error
-	getOriginalURLResult  string
+	shortenURLErr        error
+	shortenURLResult     string
+	getOriginalURLErr    error
+	getOriginalURLResult string
+	getUserURLsResult    []repository.UserURL
+	getUserURLsErr       error
 }
 
-func (m *mockShortenerService) ShortenURL(longURL string) (string, error) {
+func (m *mockShortenerService) ShortenURL(longURL string, userID string) (string, error) {
 	if m.shortenURLErr != nil {
 		return "", m.shortenURLErr
 	}
@@ -32,7 +37,7 @@ func (m *mockShortenerService) GetOriginalURL(shortID string) (string, error) {
 	return m.getOriginalURLResult, nil
 }
 
-func (m *mockShortenerService) ShortenURLBatch(urls map[string]string) (map[string]string, error) {
+func (m *mockShortenerService) ShortenURLBatch(urls map[string]string, userID string) (map[string]string, error) {
 	if m.shortenURLErr != nil {
 		return nil, m.shortenURLErr
 	}
@@ -41,6 +46,13 @@ func (m *mockShortenerService) ShortenURLBatch(urls map[string]string) (map[stri
 		result[cid] = "batch_" + cid
 	}
 	return result, nil
+}
+
+func (m *mockShortenerService) GetUserURLs(userID string) ([]repository.UserURL, error) {
+	if m.getUserURLsErr != nil {
+		return nil, m.getUserURLsErr
+	}
+	return m.getUserURLsResult, nil
 }
 
 func TestShortenerHandler_ShortenURL(t *testing.T) {
@@ -381,6 +393,83 @@ func TestShortenerHandler_ShortenURLJSON(t *testing.T) {
 				// Проверяем результат
 				if response.Result != tt.expectedBody.Result {
 					t.Errorf("expected result %q, got %q", tt.expectedBody.Result, response.Result)
+				}
+			}
+		})
+	}
+}
+
+func TestShortenerHandler_GetUserURLs(t *testing.T) {
+	baseURL := "http://localhost:8080"
+
+	tests := []struct {
+		name           string
+		method         string
+		userIDInCtx    string
+		mockService    *mockShortenerService
+		expectedStatus int
+		expectedBody   []UserURLResponse
+	}{
+		{
+			name:        "401 - нет user ID в контексте",
+			method:      http.MethodGet,
+			userIDInCtx: "",
+			mockService: &mockShortenerService{},
+			expectedStatus: http.StatusUnauthorized,
+		},
+		{
+			name:        "204 - у пользователя нет URL",
+			method:      http.MethodGet,
+			userIDInCtx: "user-1",
+			mockService: &mockShortenerService{
+				getUserURLsResult: nil,
+			},
+			expectedStatus: http.StatusNoContent,
+		},
+		{
+			name:        "200 - список URL пользователя",
+			method:      http.MethodGet,
+			userIDInCtx: "user-1",
+			mockService: &mockShortenerService{
+				getUserURLsResult: []repository.UserURL{
+					{ShortURL: "abc", OriginalURL: "https://example.com/1"},
+					{ShortURL: "def", OriginalURL: "https://example.com/2"},
+				},
+			},
+			expectedStatus: http.StatusOK,
+			expectedBody: []UserURLResponse{
+				{ShortURL: baseURL + "/abc", OriginalURL: "https://example.com/1"},
+				{ShortURL: baseURL + "/def", OriginalURL: "https://example.com/2"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := &ShortenerHandler{service: tt.mockService, baseURL: baseURL}
+			req := httptest.NewRequest(tt.method, "/api/user/urls", nil)
+			if tt.userIDInCtx != "" {
+				req = req.WithContext(context.WithValue(req.Context(), middleware.UserIDContextKey, tt.userIDInCtx))
+			}
+			rr := httptest.NewRecorder()
+			h.GetUserURLs(rr, req)
+			if rr.Code != tt.expectedStatus {
+				t.Errorf("expected status %d, got %d", tt.expectedStatus, rr.Code)
+			}
+			if tt.expectedBody != nil {
+				var body []UserURLResponse
+				if err := json.NewDecoder(rr.Body).Decode(&body); err != nil {
+					t.Errorf("decode response: %v", err)
+					return
+				}
+				if len(body) != len(tt.expectedBody) {
+					t.Errorf("expected %d items, got %d", len(tt.expectedBody), len(body))
+					return
+				}
+				for i := range body {
+					if body[i].ShortURL != tt.expectedBody[i].ShortURL || body[i].OriginalURL != tt.expectedBody[i].OriginalURL {
+						t.Errorf("item %d: expected %+v, got %+v", i, tt.expectedBody[i], body[i])
+					}
 				}
 			}
 		})

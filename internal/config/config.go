@@ -11,15 +11,18 @@ import (
 type Config struct {
 	// ServerAddress адрес запуска HTTP-сервера (например, localhost:8080)
 	ServerAddress string
-	
+
 	// BaseURL базовый адрес результирующего сокращённого URL (например, http://localhost:8080)
 	BaseURL string
-	
+
 	// FileStoragePath путь к файлу для сохранения данных (опционально)
 	FileStoragePath string
-	
+
 	// DatabaseDSN строка подключения к базе данных PostgreSQL (опционально)
 	DatabaseDSN string
+
+	// CookieSecret секретный ключ для подписи cookie пользователя (симметричная подпись)
+	CookieSecret string
 }
 
 // LoadConfig загружает конфигурацию с приоритетом:
@@ -36,12 +39,14 @@ func LoadConfig() (*Config, error) {
 	var baseURL string
 	var fileStoragePath string
 	var databaseDSN string
-	
+	var cookieSecret string
+
 	// Определяем флаги командной строки
 	flag.StringVar(&serverAddr, "a", defaultServerAddr, "адрес запуска HTTP-сервера")
 	flag.StringVar(&baseURL, "b", defaultBaseURL, "базовый адрес результирующего сокращённого URL")
 	flag.StringVar(&fileStoragePath, "f", "", "путь к файлу для сохранения данных")
 	flag.StringVar(&databaseDSN, "d", "", "строка подключения к базе данных PostgreSQL")
+	flag.StringVar(&cookieSecret, "s", "", "секретный ключ для подписи cookie пользователя")
 	
 	// Парсим аргументы командной строки
 	flag.Parse()
@@ -63,7 +68,13 @@ func LoadConfig() (*Config, error) {
 	if envDatabaseDSN := os.Getenv("DATABASE_DSN"); envDatabaseDSN != "" {
 		databaseDSN = envDatabaseDSN
 	}
-	
+	if envCookieSecret := os.Getenv("COOKIE_SECRET"); envCookieSecret != "" {
+		cookieSecret = envCookieSecret
+	}
+	if cookieSecret == "" {
+		cookieSecret = "default-secret-key"
+	}
+
 	// Приоритет 2: Если переменная окружения не установлена,
 	// используется значение из флага командной строки (или значение по умолчанию)
 	// Это уже обработано выше через flag.StringVar
@@ -74,6 +85,7 @@ func LoadConfig() (*Config, error) {
 		BaseURL:         baseURL,
 		FileStoragePath: fileStoragePath,
 		DatabaseDSN:     databaseDSN,
+		CookieSecret:    cookieSecret,
 	}
 	
 	// Валидируем конфигурацию
