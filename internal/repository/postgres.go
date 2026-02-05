@@ -69,6 +69,11 @@ func (r *PostgresRepository) migrate() error {
 	if _, err := r.db.Exec(createIdxUser); err != nil {
 		return fmt.Errorf("failed to create idx_user_id: %w", err)
 	}
+	// Миграция: добавляем колонку is_deleted для soft delete
+	alterDeleted := `ALTER TABLE url_mappings ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN NOT NULL DEFAULT FALSE;`
+	if _, err := r.db.Exec(alterDeleted); err != nil {
+		return fmt.Errorf("failed to add is_deleted column: %w", err)
+	}
 	return nil
 }
 
@@ -90,9 +95,9 @@ func (r *PostgresRepository) Save(id string, originalURL string, userID string) 
 			if pqErr.Code == pgerrcode.UniqueViolation {
 				// Проверяем, какое именно ограничение было нарушено
 				// Может быть idx_original_url (наш индекс) или автоматически сгенерированное имя
-				if pqErr.Constraint == "idx_original_url" || 
-				   pqErr.Constraint == "url_mappings_original_url_key" ||
-				   (pqErr.Column == "original_url" && pqErr.Table == "url_mappings") {
+				if pqErr.Constraint == "idx_original_url" ||
+					pqErr.Constraint == "url_mappings_original_url_key" ||
+					(pqErr.Column == "original_url" && pqErr.Table == "url_mappings") {
 					return ErrDuplicateURL
 				}
 			}
@@ -139,24 +144,25 @@ func (r *PostgresRepository) SaveBatch(mappings map[string]string, userID string
 	return nil
 }
 
-// Get возвращает оригинальный URL по короткому ID
-func (r *PostgresRepository) Get(id string) (string, error) {
+// Get возвращает оригинальный URL по короткому ID и флаг удаления
+func (r *PostgresRepository) Get(id string) (string, bool, error) {
 	query := `
-		SELECT original_url
+		SELECT original_url, COALESCE(is_deleted, FALSE)
 		FROM url_mappings
 		WHERE short_url = $1
 	`
 
 	var originalURL string
-	err := r.db.QueryRow(query, id).Scan(&originalURL)
+	var isDeleted bool
+	err := r.db.QueryRow(query, id).Scan(&originalURL, &isDeleted)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return "", errors.New("URL not found")
+			return "", false, errors.New("URL not found")
 		}
-		return "", fmt.Errorf("failed to get URL: %w", err)
+		return "", false, fmt.Errorf("failed to get URL: %w", err)
 	}
 
-	return originalURL, nil
+	return originalURL, isDeleted, nil
 }
 
 // GetByOriginalURL возвращает короткий ID по оригинальному URL
@@ -179,12 +185,12 @@ func (r *PostgresRepository) GetByOriginalURL(originalURL string) (string, error
 	return shortURL, nil
 }
 
-// GetByUserID возвращает все URL, сокращённые пользователем userID
+// GetByUserID возвращает все не удалённые URL, сокращённые пользователем userID
 func (r *PostgresRepository) GetByUserID(userID string) ([]UserURL, error) {
 	query := `
 		SELECT short_url, original_url
 		FROM url_mappings
-		WHERE user_id = $1
+		WHERE user_id = $1 AND (is_deleted IS NULL OR is_deleted = FALSE)
 		ORDER BY created_at
 	`
 	rows, err := r.db.Query(query, userID)
@@ -206,6 +212,23 @@ func (r *PostgresRepository) GetByUserID(userID string) ([]UserURL, error) {
 	return result, nil
 }
 
+// MarkDeleted помечает указанные short_url как удалённые только для записей, принадлежащих userID (batch update)
+func (r *PostgresRepository) MarkDeleted(userID string, shortIDs []string) error {
+	if len(shortIDs) == 0 {
+		return nil
+	}
+	query := `
+		UPDATE url_mappings
+		SET is_deleted = TRUE
+		WHERE user_id = $1 AND short_url = ANY($2)
+	`
+	_, err := r.db.Exec(query, userID, pq.Array(shortIDs))
+	if err != nil {
+		return fmt.Errorf("failed to mark URLs as deleted: %w", err)
+	}
+	return nil
+}
+
 // Close закрывает соединение с базой данных
 func (r *PostgresRepository) Close() error {
 	if r.db != nil {
@@ -213,4 +236,3 @@ func (r *PostgresRepository) Close() error {
 	}
 	return nil
 }
-

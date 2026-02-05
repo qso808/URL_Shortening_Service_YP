@@ -29,16 +29,18 @@ type ShortenerService struct {
 // Repository определяет интерфейс репозитория
 type Repository interface {
 	Save(id string, originalURL string, userID string) error
-	Get(id string) (string, error)
+	Get(id string) (string, bool, error)
 	GetByUserID(userID string) ([]repository.UserURL, error)
+	MarkDeleted(userID string, shortIDs []string) error
 }
 
 // Shortener определяет интерфейс сервиса сокращения URL
 type Shortener interface {
 	ShortenURL(longURL string, userID string) (string, error)
-	GetOriginalURL(shortID string) (string, error)
+	GetOriginalURL(shortID string) (string, bool, error)
 	ShortenURLBatch(urls map[string]string, userID string) (map[string]string, error)
 	GetUserURLs(userID string) ([]repository.UserURL, error)
+	DeleteUserURLs(userID string, shortIDs []string) error
 }
 
 // NewShortenerService создает новый экземпляр сервиса
@@ -73,13 +75,20 @@ func (s *ShortenerService) ShortenURL(longURL string, userID string) (string, er
 	return shortID, nil
 }
 
-// GetOriginalURL возвращает оригинальный URL по короткому ID
-func (s *ShortenerService) GetOriginalURL(shortID string) (string, error) {
+// GetOriginalURL возвращает оригинальный URL по короткому ID и флаг удаления
+func (s *ShortenerService) GetOriginalURL(shortID string) (string, bool, error) {
 	if shortID == "" {
-		return "", errors.New("empty short ID")
+		return "", false, errors.New("empty short ID")
 	}
-	
 	return s.repo.Get(shortID)
+}
+
+// DeleteUserURLs помечает указанные short URL как удалённые (только принадлежащие userID)
+func (s *ShortenerService) DeleteUserURLs(userID string, shortIDs []string) error {
+	if userID == "" || len(shortIDs) == 0 {
+		return nil
+	}
+	return s.repo.MarkDeleted(userID, shortIDs)
 }
 
 // validateURL проверяет корректность URL
@@ -87,23 +96,23 @@ func (s *ShortenerService) validateURL(urlStr string) error {
 	if urlStr == "" {
 		return errors.New("empty URL")
 	}
-	
+
 	// Проверяем, что это валидный URL
 	parsedURL, err := url.Parse(urlStr)
 	if err != nil {
 		return errors.New("invalid URL format")
 	}
-	
+
 	// URL должен иметь схему (http или https)
 	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
 		return errors.New("URL must have http or https scheme")
 	}
-	
+
 	// URL должен иметь host
 	if parsedURL.Host == "" {
 		return errors.New("URL must have a host")
 	}
-	
+
 	return nil
 }
 
@@ -112,7 +121,7 @@ func (s *ShortenerService) generateShortID() string {
 	// Генерируем 6 байт случайных данных
 	b := make([]byte, 6)
 	rand.Read(b)
-	
+
 	// Кодируем в base64 URL-safe формат и берем первые 8 символов
 	encoded := base64.URLEncoding.EncodeToString(b)
 	// Убираем padding и берем первые 8 символов
@@ -120,7 +129,7 @@ func (s *ShortenerService) generateShortID() string {
 	if len(encoded) > 8 {
 		encoded = encoded[:8]
 	}
-	
+
 	return encoded
 }
 

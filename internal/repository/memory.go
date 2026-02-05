@@ -5,17 +5,23 @@ import (
 	"sync"
 )
 
+type memoryEntry struct {
+	originalURL string
+	userID      string
+	deleted     bool
+}
+
 // MemoryRepository - in-memory реализация репозитория
 type MemoryRepository struct {
 	mu       sync.RWMutex
-	store    map[string]string       // shortID -> originalURL
-	userURLs map[string][]string     // userID -> []shortID
+	store    map[string]memoryEntry // shortID -> entry
+	userURLs map[string][]string    // userID -> []shortID
 }
 
 // NewMemoryRepository создает новый экземпляр in-memory репозитория
 func NewMemoryRepository() *MemoryRepository {
 	return &MemoryRepository{
-		store:    make(map[string]string),
+		store:    make(map[string]memoryEntry),
 		userURLs: make(map[string][]string),
 	}
 }
@@ -25,7 +31,7 @@ func (r *MemoryRepository) Save(id string, originalURL string, userID string) er
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	r.store[id] = originalURL
+	r.store[id] = memoryEntry{originalURL: originalURL, userID: userID}
 	if userID != "" {
 		ids := r.userURLs[userID]
 		for _, sid := range ids {
@@ -38,19 +44,19 @@ func (r *MemoryRepository) Save(id string, originalURL string, userID string) er
 	return nil
 }
 
-// Get возвращает оригинальный URL по короткому ID
-func (r *MemoryRepository) Get(id string) (string, error) {
+// Get возвращает оригинальный URL по короткому ID и флаг удаления
+func (r *MemoryRepository) Get(id string) (string, bool, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	url, exists := r.store[id]
+	entry, exists := r.store[id]
 	if !exists {
-		return "", errors.New("URL not found")
+		return "", false, errors.New("URL not found")
 	}
-	return url, nil
+	return entry.originalURL, entry.deleted, nil
 }
 
-// GetByUserID возвращает все URL, сокращённые пользователем userID
+// GetByUserID возвращает все не удалённые URL, сокращённые пользователем userID
 func (r *MemoryRepository) GetByUserID(userID string) ([]UserURL, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -61,12 +67,27 @@ func (r *MemoryRepository) GetByUserID(userID string) ([]UserURL, error) {
 	}
 	result := make([]UserURL, 0, len(ids))
 	for _, shortID := range ids {
-		originalURL, ok := r.store[shortID]
-		if !ok {
+		entry, ok := r.store[shortID]
+		if !ok || entry.deleted {
 			continue
 		}
-		result = append(result, UserURL{ShortURL: shortID, OriginalURL: originalURL})
+		result = append(result, UserURL{ShortURL: shortID, OriginalURL: entry.originalURL})
 	}
 	return result, nil
 }
 
+// MarkDeleted помечает указанные short_url как удалённые только для записей, принадлежащих userID
+func (r *MemoryRepository) MarkDeleted(userID string, shortIDs []string) error {
+	if len(shortIDs) == 0 {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, id := range shortIDs {
+		if entry, ok := r.store[id]; ok && entry.userID == userID {
+			entry.deleted = true
+			r.store[id] = entry
+		}
+	}
+	return nil
+}

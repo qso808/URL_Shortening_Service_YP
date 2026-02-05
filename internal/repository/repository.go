@@ -11,10 +11,12 @@ type Repository interface {
 	// Save сохраняет связь между коротким ID, оригинальным URL и идентификатором пользователя
 	Save(id string, originalURL string, userID string) error
 
-	// Get возвращает оригинальный URL по короткому ID
-	Get(id string) (string, error)
+	// Get возвращает оригинальный URL по короткому ID и флаг удаления (soft delete)
+	Get(id string) (originalURL string, deleted bool, err error)
 
-	// GetByUserID возвращает все URL, сокращённые пользователем userID
+	// GetByUserID возвращает все не удалённые URL, сокращённые пользователем userID
 	GetByUserID(userID string) ([]UserURL, error)
-}
 
+	// MarkDeleted помечает URL как удалённые (только записи, принадлежащие userID)
+	MarkDeleted(userID string, shortIDs []string) error
+}

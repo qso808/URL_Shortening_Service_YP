@@ -15,12 +15,13 @@ import (
 
 // mockShortenerService - мок для тестирования handlers
 type mockShortenerService struct {
-	shortenURLErr        error
-	shortenURLResult     string
-	getOriginalURLErr    error
-	getOriginalURLResult string
-	getUserURLsResult    []repository.UserURL
-	getUserURLsErr       error
+	shortenURLErr         error
+	shortenURLResult      string
+	getOriginalURLErr     error
+	getOriginalURLResult  string
+	getOriginalURLDeleted bool
+	getUserURLsResult     []repository.UserURL
+	getUserURLsErr        error
 }
 
 func (m *mockShortenerService) ShortenURL(longURL string, userID string) (string, error) {
@@ -30,11 +31,15 @@ func (m *mockShortenerService) ShortenURL(longURL string, userID string) (string
 	return m.shortenURLResult, nil
 }
 
-func (m *mockShortenerService) GetOriginalURL(shortID string) (string, error) {
+func (m *mockShortenerService) GetOriginalURL(shortID string) (string, bool, error) {
 	if m.getOriginalURLErr != nil {
-		return "", m.getOriginalURLErr
+		return "", false, m.getOriginalURLErr
 	}
-	return m.getOriginalURLResult, nil
+	return m.getOriginalURLResult, m.getOriginalURLDeleted, nil
+}
+
+func (m *mockShortenerService) DeleteUserURLs(userID string, shortIDs []string) error {
+	return nil
 }
 
 func (m *mockShortenerService) ShortenURLBatch(urls map[string]string, userID string) (map[string]string, error) {
@@ -57,7 +62,7 @@ func (m *mockShortenerService) GetUserURLs(userID string) ([]repository.UserURL,
 
 func TestShortenerHandler_ShortenURL(t *testing.T) {
 	baseURL := "http://localhost:8080"
-	
+
 	tests := []struct {
 		name           string
 		method         string
@@ -111,9 +116,9 @@ func TestShortenerHandler_ShortenURL(t *testing.T) {
 			expectedStatus: http.StatusBadRequest,
 		},
 		{
-			name:           "пустое тело запроса",
-			method:         http.MethodPost,
-			body:           "",
+			name:   "пустое тело запроса",
+			method: http.MethodPost,
+			body:   "",
 			mockService: &mockShortenerService{
 				shortenURLErr: errors.New("empty URL"),
 			},
@@ -159,13 +164,13 @@ func TestShortenerHandler_ShortenURL(t *testing.T) {
 
 func TestShortenerHandler_Redirect(t *testing.T) {
 	baseURL := "http://localhost:8080"
-	
+
 	tests := []struct {
-		name           string
-		method         string
-		path           string
-		mockService    *mockShortenerService
-		expectedStatus int
+		name             string
+		method           string
+		path             string
+		mockService      *mockShortenerService
+		expectedStatus   int
 		expectedLocation string
 	}{
 		{
@@ -229,6 +234,16 @@ func TestShortenerHandler_Redirect(t *testing.T) {
 			},
 			expectedStatus: http.StatusBadRequest,
 		},
+		{
+			name:   "410 Gone — URL помечен как удалённый",
+			method: http.MethodGet,
+			path:   "/EwHXdJfB",
+			mockService: &mockShortenerService{
+				getOriginalURLResult:  "https://practicum.yandex.ru/",
+				getOriginalURLDeleted: true,
+			},
+			expectedStatus: http.StatusGone,
+		},
 	}
 
 	for _, tt := range tests {
@@ -259,6 +274,69 @@ func TestShortenerHandler_Redirect(t *testing.T) {
 				if location != tt.expectedLocation {
 					t.Errorf("expected Location %q, got %q", tt.expectedLocation, location)
 				}
+			}
+		})
+	}
+}
+
+func TestShortenerHandler_DeleteUserURLs(t *testing.T) {
+	baseURL := "http://localhost:8080"
+	ch := make(chan DeleteTask, 4)
+
+	tests := []struct {
+		name           string
+		method         string
+		contentType    string
+		body           string
+		userIDInCtx    string
+		expectedStatus int
+	}{
+		{
+			name:           "202 Accepted — запрос принят в обработку",
+			method:         http.MethodDelete,
+			contentType:    "application/json",
+			body:           `["6qxTVvsy", "RTfd56hn"]`,
+			userIDInCtx:    "user-1",
+			expectedStatus: http.StatusAccepted,
+		},
+		{
+			name:           "401 — нет user ID",
+			method:         http.MethodDelete,
+			contentType:    "application/json",
+			body:           `["6qxTVvsy"]`,
+			userIDInCtx:    "",
+			expectedStatus: http.StatusUnauthorized,
+		},
+		{
+			name:           "400 — не application/json",
+			method:         http.MethodDelete,
+			contentType:    "text/plain",
+			body:           `["6qxTVvsy"]`,
+			userIDInCtx:    "user-1",
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name:           "400 — невалидный JSON",
+			method:         http.MethodDelete,
+			contentType:    "application/json",
+			body:           `[invalid]`,
+			userIDInCtx:    "user-1",
+			expectedStatus: http.StatusBadRequest,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := &mockShortenerService{}
+			h := NewShortenerHandler(mock, baseURL, ch)
+			req := httptest.NewRequest(tt.method, "/api/user/urls", bytes.NewBufferString(tt.body))
+			req.Header.Set("Content-Type", tt.contentType)
+			if tt.userIDInCtx != "" {
+				req = req.WithContext(context.WithValue(req.Context(), middleware.UserIDContextKey, tt.userIDInCtx))
+			}
+			rr := httptest.NewRecorder()
+			h.DeleteUserURLs(rr, req)
+			if rr.Code != tt.expectedStatus {
+				t.Errorf("expected status %d, got %d", tt.expectedStatus, rr.Code)
 			}
 		})
 	}
@@ -324,11 +402,11 @@ func TestShortenerHandler_ShortenURLJSON(t *testing.T) {
 			expectedStatus: http.StatusBadRequest,
 		},
 		{
-			name:        "отсутствует поле url в JSON",
-			method:      http.MethodPost,
-			contentType: "application/json",
-			body:        `{}`,
-			mockService: &mockShortenerService{},
+			name:           "отсутствует поле url в JSON",
+			method:         http.MethodPost,
+			contentType:    "application/json",
+			body:           `{}`,
+			mockService:    &mockShortenerService{},
 			expectedStatus: http.StatusBadRequest,
 		},
 		{
@@ -411,10 +489,10 @@ func TestShortenerHandler_GetUserURLs(t *testing.T) {
 		expectedBody   []UserURLResponse
 	}{
 		{
-			name:        "401 - нет user ID в контексте",
-			method:      http.MethodGet,
-			userIDInCtx: "",
-			mockService: &mockShortenerService{},
+			name:           "401 - нет user ID в контексте",
+			method:         http.MethodGet,
+			userIDInCtx:    "",
+			mockService:    &mockShortenerService{},
 			expectedStatus: http.StatusUnauthorized,
 		},
 		{
@@ -475,4 +553,3 @@ func TestShortenerHandler_GetUserURLs(t *testing.T) {
 		})
 	}
 }
-

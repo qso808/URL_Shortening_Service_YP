@@ -72,8 +72,16 @@ func main() {
 	// Создаем сервис
 	shortenerService := service.NewShortenerService(repo)
 
+	// Канал для асинхронного удаления URL (fan-in: несколько DELETE-запросов → один воркер)
+	deleteChan := make(chan handler.DeleteTask, 256)
+	go func() {
+		for task := range deleteChan {
+			_ = shortenerService.DeleteUserURLs(task.UserID, task.ShortIDs)
+		}
+	}()
+
 	// Создаем хэндлер
-	shortenerHandler := handler.NewShortenerHandler(shortenerService, cfg.BaseURL)
+	shortenerHandler := handler.NewShortenerHandler(shortenerService, cfg.BaseURL, deleteChan)
 
 	// Инициализируем logger zerolog на уровне Info
 	logger := zerolog.New(os.Stdout).With().Timestamp().Logger().Level(zerolog.InfoLevel)
@@ -95,6 +103,8 @@ func main() {
 
 	// GET /api/user/urls — список URL пользователя (до GET /{id}, чтобы не перехватить путь)
 	router.Get("/api/user/urls", shortenerHandler.GetUserURLs)
+	// DELETE /api/user/urls — асинхронное удаление списка short URL (202 Accepted)
+	router.Delete("/api/user/urls", shortenerHandler.DeleteUserURLs)
 
 	router.Get("/{id}", shortenerHandler.Redirect)
 
@@ -127,6 +137,7 @@ func main() {
 	if err := server.Shutdown(ctx); err != nil {
 		log.Fatalf("Server forced to shutdown: %v", err)
 	}
+	close(deleteChan)
 
 	// Закрываем соединение с PostgreSQL, если оно было открыто
 	if cfg.DatabaseDSN != "" {

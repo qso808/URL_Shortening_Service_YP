@@ -15,6 +15,7 @@ import (
 type fileEntry struct {
 	originalURL string
 	userID      string
+	deleted     bool
 }
 
 // FileRepository - файловая реализация репозитория
@@ -45,7 +46,7 @@ func (r *FileRepository) Save(id string, originalURL string, userID string) erro
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	r.store[id] = fileEntry{originalURL: originalURL, userID: userID}
+	r.store[id] = fileEntry{originalURL: originalURL, userID: userID, deleted: false}
 
 	if err := r.saveToFile(); err != nil {
 		return fmt.Errorf("failed to save to file: %w", err)
@@ -53,30 +54,49 @@ func (r *FileRepository) Save(id string, originalURL string, userID string) erro
 	return nil
 }
 
-// Get возвращает оригинальный URL по короткому ID
-func (r *FileRepository) Get(id string) (string, error) {
+// Get возвращает оригинальный URL по короткому ID и флаг удаления
+func (r *FileRepository) Get(id string) (string, bool, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	entry, exists := r.store[id]
 	if !exists {
-		return "", errors.New("URL not found")
+		return "", false, errors.New("URL not found")
 	}
-	return entry.originalURL, nil
+	return entry.originalURL, entry.deleted, nil
 }
 
-// GetByUserID возвращает все URL, сокращённые пользователем userID
+// GetByUserID возвращает все не удалённые URL, сокращённые пользователем userID
 func (r *FileRepository) GetByUserID(userID string) ([]UserURL, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	var result []UserURL
 	for shortID, entry := range r.store {
-		if entry.userID == userID {
+		if entry.userID == userID && !entry.deleted {
 			result = append(result, UserURL{ShortURL: shortID, OriginalURL: entry.originalURL})
 		}
 	}
 	return result, nil
+}
+
+// MarkDeleted помечает указанные short_url как удалённые только для записей, принадлежащих userID
+func (r *FileRepository) MarkDeleted(userID string, shortIDs []string) error {
+	if len(shortIDs) == 0 {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, id := range shortIDs {
+		if entry, ok := r.store[id]; ok && entry.userID == userID {
+			entry.deleted = true
+			r.store[id] = entry
+		}
+	}
+	if err := r.saveToFile(); err != nil {
+		return fmt.Errorf("failed to save to file: %w", err)
+	}
+	return nil
 }
 
 // SaveBatch сохраняет множество URL одним разом (userID для всех записей)
@@ -89,7 +109,7 @@ func (r *FileRepository) SaveBatch(mappings map[string]string, userID string) er
 	defer r.mu.Unlock()
 
 	for shortID, originalURL := range mappings {
-		r.store[shortID] = fileEntry{originalURL: originalURL, userID: userID}
+		r.store[shortID] = fileEntry{originalURL: originalURL, userID: userID, deleted: false}
 	}
 
 	// Сохраняем в файл один раз
@@ -126,7 +146,11 @@ func (r *FileRepository) loadFromFile() error {
 	}
 
 	for _, record := range records {
-		r.store[record.ShortURL] = fileEntry{originalURL: record.OriginalURL, userID: record.UserID}
+		r.store[record.ShortURL] = fileEntry{
+			originalURL: record.OriginalURL,
+			userID:      record.UserID,
+			deleted:     record.IsDeleted,
+		}
 	}
 
 	return nil
@@ -141,6 +165,7 @@ func (r *FileRepository) saveToFile() error {
 			ShortURL:    shortURL,
 			OriginalURL: entry.originalURL,
 			UserID:      entry.userID,
+			IsDeleted:   entry.deleted,
 		})
 	}
 
@@ -165,4 +190,3 @@ func (r *FileRepository) saveToFile() error {
 
 	return nil
 }
-
