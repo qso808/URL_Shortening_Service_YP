@@ -15,13 +15,12 @@ import (
 
 // mockShortenerService - мок для тестирования handlers
 type mockShortenerService struct {
-	shortenURLErr         error
-	shortenURLResult      string
-	getOriginalURLErr     error
-	getOriginalURLResult  string
-	getOriginalURLDeleted bool
-	getUserURLsResult     []repository.UserURL
-	getUserURLsErr        error
+	shortenURLErr        error
+	shortenURLResult     string
+	getOriginalURLErr   error
+	getOriginalURLResult string
+	getUserURLsResult    []repository.UserURL
+	getUserURLsErr       error
 }
 
 func (m *mockShortenerService) ShortenURL(longURL string, userID string) (string, error) {
@@ -31,11 +30,11 @@ func (m *mockShortenerService) ShortenURL(longURL string, userID string) (string
 	return m.shortenURLResult, nil
 }
 
-func (m *mockShortenerService) GetOriginalURL(shortID string) (string, bool, error) {
+func (m *mockShortenerService) GetOriginalURL(shortID string) (string, error) {
 	if m.getOriginalURLErr != nil {
-		return "", false, m.getOriginalURLErr
+		return "", m.getOriginalURLErr
 	}
-	return m.getOriginalURLResult, m.getOriginalURLDeleted, nil
+	return m.getOriginalURLResult, nil
 }
 
 func (m *mockShortenerService) DeleteUserURLs(userID string, shortIDs []string) error {
@@ -82,20 +81,6 @@ func TestShortenerHandler_ShortenURL(t *testing.T) {
 			expectedStatus: http.StatusCreated,
 			expectedBody:   "http://localhost:8080/EwHXdJfB",
 			expectedHeader: "text/plain",
-		},
-		{
-			name:           "неправильный метод - GET",
-			method:         http.MethodGet,
-			body:           "https://practicum.yandex.ru/",
-			mockService:    &mockShortenerService{},
-			expectedStatus: http.StatusMethodNotAllowed,
-		},
-		{
-			name:           "неправильный метод - PUT",
-			method:         http.MethodPut,
-			body:           "https://practicum.yandex.ru/",
-			mockService:    &mockShortenerService{},
-			expectedStatus: http.StatusMethodNotAllowed,
 		},
 		{
 			name:   "ошибка валидации URL в сервисе",
@@ -194,20 +179,6 @@ func TestShortenerHandler_Redirect(t *testing.T) {
 			expectedLocation: "https://example.com/page",
 		},
 		{
-			name:           "неправильный метод - POST",
-			method:         http.MethodPost,
-			path:           "/EwHXdJfB",
-			mockService:    &mockShortenerService{},
-			expectedStatus: http.StatusMethodNotAllowed,
-		},
-		{
-			name:           "неправильный метод - PUT",
-			method:         http.MethodPut,
-			path:           "/EwHXdJfB",
-			mockService:    &mockShortenerService{},
-			expectedStatus: http.StatusMethodNotAllowed,
-		},
-		{
 			name:   "URL не найден",
 			method: http.MethodGet,
 			path:   "/NonExistentID",
@@ -239,8 +210,7 @@ func TestShortenerHandler_Redirect(t *testing.T) {
 			method: http.MethodGet,
 			path:   "/EwHXdJfB",
 			mockService: &mockShortenerService{
-				getOriginalURLResult:  "https://practicum.yandex.ru/",
-				getOriginalURLDeleted: true,
+				getOriginalURLErr: repository.ErrDeleted,
 			},
 			expectedStatus: http.StatusGone,
 		},
@@ -327,7 +297,7 @@ func TestShortenerHandler_DeleteUserURLs(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			mock := &mockShortenerService{}
-			h := NewShortenerHandler(mock, baseURL, ch)
+			h := NewShortenerHandler(mock, baseURL, ch, nil)
 			req := httptest.NewRequest(tt.method, "/api/user/urls", bytes.NewBufferString(tt.body))
 			req.Header.Set("Content-Type", tt.contentType)
 			if tt.userIDInCtx != "" {
@@ -368,14 +338,6 @@ func TestShortenerHandler_ShortenURLJSON(t *testing.T) {
 				Result: "http://localhost:8080/EwHXdJfB",
 			},
 			expectedHeader: "application/json",
-		},
-		{
-			name:           "неправильный метод - GET",
-			method:         http.MethodGet,
-			contentType:    "application/json",
-			body:           `{"url":"https://practicum.yandex.ru"}`,
-			mockService:    &mockShortenerService{},
-			expectedStatus: http.StatusMethodNotAllowed,
 		},
 		{
 			name:           "неправильный Content-Type",

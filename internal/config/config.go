@@ -52,24 +52,21 @@ func LoadConfig() (*Config, error) {
 	flag.Parse()
 	
 	// Приоритет 1: Проверяем переменные окружения
-	// Если переменная окружения установлена, используем её
-	if envServerAddr := os.Getenv("SERVER_ADDRESS"); envServerAddr != "" {
-		serverAddr = envServerAddr
+	// LookupEnv позволяет отличить необъявленную переменную от переменной с пустым значением
+	if v, ok := os.LookupEnv("SERVER_ADDRESS"); ok {
+		serverAddr = v
 	}
-	
-	if envBaseURL := os.Getenv("BASE_URL"); envBaseURL != "" {
-		baseURL = envBaseURL
+	if v, ok := os.LookupEnv("BASE_URL"); ok {
+		baseURL = v
 	}
-	
-	if envFileStoragePath := os.Getenv("FILE_STORAGE_PATH"); envFileStoragePath != "" {
-		fileStoragePath = envFileStoragePath
+	if v, ok := os.LookupEnv("FILE_STORAGE_PATH"); ok {
+		fileStoragePath = v
 	}
-	
-	if envDatabaseDSN := os.Getenv("DATABASE_DSN"); envDatabaseDSN != "" {
-		databaseDSN = envDatabaseDSN
+	if v, ok := os.LookupEnv("DATABASE_DSN"); ok {
+		databaseDSN = v
 	}
-	if envCookieSecret := os.Getenv("COOKIE_SECRET"); envCookieSecret != "" {
-		cookieSecret = envCookieSecret
+	if v, ok := os.LookupEnv("COOKIE_SECRET"); ok {
+		cookieSecret = v
 	}
 	if cookieSecret == "" {
 		cookieSecret = "default-secret-key"

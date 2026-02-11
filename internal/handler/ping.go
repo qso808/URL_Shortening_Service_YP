@@ -19,12 +19,6 @@ func NewPingHandler(db *sql.DB) *PingHandler {
 
 // Ping проверяет соединение с базой данных
 func (h *PingHandler) Ping(w http.ResponseWriter, r *http.Request) {
-	// Проверяем метод
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	// Если база данных не настроена, возвращаем 500
 	if h.db == nil {
 		w.WriteHeader(http.StatusInternalServerError)

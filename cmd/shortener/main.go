@@ -80,11 +80,12 @@ func main() {
 		}
 	}()
 
-	// Создаем хэндлер
-	shortenerHandler := handler.NewShortenerHandler(shortenerService, cfg.BaseURL, deleteChan)
-
-	// Инициализируем logger zerolog на уровне Info
+	// Создаем хэндлер с логированием 5xx
 	logger := zerolog.New(os.Stdout).With().Timestamp().Logger().Level(zerolog.InfoLevel)
+	logError := func(err error, msg string) {
+		logger.Error().Err(err).Msg(msg)
+	}
+	shortenerHandler := handler.NewShortenerHandler(shortenerService, cfg.BaseURL, deleteChan, logError)
 
 	// Настраиваем роутер с использованием chi
 	router := chi.NewRouter()

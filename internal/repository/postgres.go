@@ -144,8 +144,8 @@ func (r *PostgresRepository) SaveBatch(mappings map[string]string, userID string
 	return nil
 }
 
-// Get возвращает оригинальный URL по короткому ID и флаг удаления
-func (r *PostgresRepository) Get(id string) (string, bool, error) {
+// Get возвращает оригинальный URL по короткому ID. ErrNotFound / ErrDeleted — для выбора status code в хендлере.
+func (r *PostgresRepository) Get(id string) (string, error) {
 	query := `
 		SELECT original_url, COALESCE(is_deleted, FALSE)
 		FROM url_mappings
@@ -157,12 +157,14 @@ func (r *PostgresRepository) Get(id string) (string, bool, error) {
 	err := r.db.QueryRow(query, id).Scan(&originalURL, &isDeleted)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return "", false, errors.New("URL not found")
+			return "", ErrNotFound
 		}
-		return "", false, fmt.Errorf("failed to get URL: %w", err)
+		return "", fmt.Errorf("failed to get URL: %w", err)
 	}
-
-	return originalURL, isDeleted, nil
+	if isDeleted {
+		return "", ErrDeleted
+	}
+	return originalURL, nil
 }
 
 // GetByOriginalURL возвращает короткий ID по оригинальному URL

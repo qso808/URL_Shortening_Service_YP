@@ -2,7 +2,6 @@ package repository
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -54,16 +53,19 @@ func (r *FileRepository) Save(id string, originalURL string, userID string) erro
 	return nil
 }
 
-// Get возвращает оригинальный URL по короткому ID и флаг удаления
-func (r *FileRepository) Get(id string) (string, bool, error) {
+// Get возвращает оригинальный URL по короткому ID. ErrNotFound / ErrDeleted — для выбора status code в хендлере.
+func (r *FileRepository) Get(id string) (string, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	entry, exists := r.store[id]
 	if !exists {
-		return "", false, errors.New("URL not found")
+		return "", ErrNotFound
 	}
-	return entry.originalURL, entry.deleted, nil
+	if entry.deleted {
+		return "", ErrDeleted
+	}
+	return entry.originalURL, nil
 }
 
 // GetByUserID возвращает все не удалённые URL, сокращённые пользователем userID

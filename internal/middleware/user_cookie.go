@@ -52,8 +52,12 @@ func UserCookie(secret string) func(next http.Handler) http.Handler {
 }
 
 // GetUserID возвращает user ID из контекста. Пустая строка — пользователь не аутентифицирован (cookie была, но невалидна).
+// Проверяет наличие значения по ключу и соответствие типа string.
 func GetUserID(ctx context.Context) string {
-	v, _ := ctx.Value(userIDContextKey).(string)
+	v, ok := ctx.Value(userIDContextKey).(string)
+	if !ok {
+		return ""
+	}
 	return v
 }
 

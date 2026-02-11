@@ -29,7 +29,7 @@ type ShortenerService struct {
 // Repository определяет интерфейс репозитория
 type Repository interface {
 	Save(id string, originalURL string, userID string) error
-	Get(id string) (string, bool, error)
+	Get(id string) (string, error)
 	GetByUserID(userID string) ([]repository.UserURL, error)
 	MarkDeleted(userID string, shortIDs []string) error
 }
@@ -37,7 +37,7 @@ type Repository interface {
 // Shortener определяет интерфейс сервиса сокращения URL
 type Shortener interface {
 	ShortenURL(longURL string, userID string) (string, error)
-	GetOriginalURL(shortID string) (string, bool, error)
+	GetOriginalURL(shortID string) (string, error)
 	ShortenURLBatch(urls map[string]string, userID string) (map[string]string, error)
 	GetUserURLs(userID string) ([]repository.UserURL, error)
 	DeleteUserURLs(userID string, shortIDs []string) error
@@ -75,10 +75,11 @@ func (s *ShortenerService) ShortenURL(longURL string, userID string) (string, er
 	return shortID, nil
 }
 
-// GetOriginalURL возвращает оригинальный URL по короткому ID и флаг удаления
-func (s *ShortenerService) GetOriginalURL(shortID string) (string, bool, error) {
+// GetOriginalURL возвращает оригинальный URL по короткому ID.
+// Ошибки repository.ErrNotFound и repository.ErrDeleted проверяются в хендлере через errors.Is для выбора status code.
+func (s *ShortenerService) GetOriginalURL(shortID string) (string, error) {
 	if shortID == "" {
-		return "", false, errors.New("empty short ID")
+		return "", errors.New("empty short ID")
 	}
 	return s.repo.Get(shortID)
 }
