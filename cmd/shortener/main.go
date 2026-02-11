@@ -72,36 +72,41 @@ func main() {
 	// Создаем сервис
 	shortenerService := service.NewShortenerService(repo)
 
-	// Создаем хэндлер
-	shortenerHandler := handler.NewShortenerHandler(shortenerService, cfg.BaseURL)
+	// Канал для асинхронного удаления URL (fan-in: несколько DELETE-запросов → один воркер)
+	deleteChan := make(chan handler.DeleteTask, 256)
+	go func() {
+		for task := range deleteChan {
+			_ = shortenerService.DeleteUserURLs(task.UserID, task.ShortIDs)
+		}
+	}()
 
-	// Инициализируем logger zerolog на уровне Info
+	// Создаем хэндлер с логированием 5xx
 	logger := zerolog.New(os.Stdout).With().Timestamp().Logger().Level(zerolog.InfoLevel)
+	logError := func(err error, msg string) {
+		logger.Error().Err(err).Msg(msg)
+	}
+	shortenerHandler := handler.NewShortenerHandler(shortenerService, cfg.BaseURL, deleteChan, logError)
 
 	// Настраиваем роутер с использованием chi
 	router := chi.NewRouter()
 
-	// Добавляем middleware для поддержки gzip (должен быть первым для обработки запросов/ответов)
 	router.Use(customMiddleware.GzipMiddleware)
-
-	// Добавляем кастомный middleware для логирования запросов и ответов
 	router.Use(customMiddleware.RequestLogger(logger))
 	router.Use(middleware.Recoverer)
+	router.Use(customMiddleware.UserCookie(cfg.CookieSecret))
 
-	// GET /ping - проверка соединения с базой данных
 	pingHandler := handler.NewPingHandler(db)
 	router.Get("/ping", pingHandler.Ping)
 
-	// POST / - сокращение URL (text/plain)
 	router.Post("/", shortenerHandler.ShortenURL)
-
-	// POST /api/shorten - сокращение URL (JSON)
 	router.Post("/api/shorten", shortenerHandler.ShortenURLJSON)
-
-	// POST /api/shorten/batch - пакетное сокращение URL (JSON)
 	router.Post("/api/shorten/batch", shortenerHandler.ShortenURLBatch)
 
-	// GET /{id} - редирект на оригинальный URL
+	// GET /api/user/urls — список URL пользователя (до GET /{id}, чтобы не перехватить путь)
+	router.Get("/api/user/urls", shortenerHandler.GetUserURLs)
+	// DELETE /api/user/urls — асинхронное удаление списка short URL (202 Accepted)
+	router.Delete("/api/user/urls", shortenerHandler.DeleteUserURLs)
+
 	router.Get("/{id}", shortenerHandler.Redirect)
 
 	// Создаем HTTP сервер
@@ -133,6 +138,7 @@ func main() {
 	if err := server.Shutdown(ctx); err != nil {
 		log.Fatalf("Server forced to shutdown: %v", err)
 	}
+	close(deleteChan)
 
 	// Закрываем соединение с PostgreSQL, если оно было открыто
 	if cfg.DatabaseDSN != "" {

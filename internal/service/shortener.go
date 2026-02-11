@@ -28,15 +28,19 @@ type ShortenerService struct {
 
 // Repository определяет интерфейс репозитория
 type Repository interface {
-	Save(id string, originalURL string) error
+	Save(id string, originalURL string, userID string) error
 	Get(id string) (string, error)
+	GetByUserID(userID string) ([]repository.UserURL, error)
+	MarkDeleted(userID string, shortIDs []string) error
 }
 
 // Shortener определяет интерфейс сервиса сокращения URL
 type Shortener interface {
-	ShortenURL(longURL string) (string, error)
+	ShortenURL(longURL string, userID string) (string, error)
 	GetOriginalURL(shortID string) (string, error)
-	ShortenURLBatch(urls map[string]string) (map[string]string, error)
+	ShortenURLBatch(urls map[string]string, userID string) (map[string]string, error)
+	GetUserURLs(userID string) ([]repository.UserURL, error)
+	DeleteUserURLs(userID string, shortIDs []string) error
 }
 
 // NewShortenerService создает новый экземпляр сервиса
@@ -47,21 +51,14 @@ func NewShortenerService(repo Repository) *ShortenerService {
 }
 
 // ShortenURL создает короткий идентификатор для длинного URL
-func (s *ShortenerService) ShortenURL(longURL string) (string, error) {
-	// Валидация URL
+func (s *ShortenerService) ShortenURL(longURL string, userID string) (string, error) {
 	if err := s.validateURL(longURL); err != nil {
 		return "", err
 	}
-	
-	// Генерируем уникальный короткий ID
+
 	shortID := s.generateShortID()
-	
-	// Сохраняем в репозиторий
-	if err := s.repo.Save(shortID, longURL); err != nil {
-		// Проверяем, является ли это ошибкой дубликата URL
+	if err := s.repo.Save(shortID, longURL, userID); err != nil {
 		if err == repository.ErrDuplicateURL {
-			// Получаем существующий shortID по originalURL
-			// Используем type assertion для проверки наличия метода GetByOriginalURL
 			if postgresRepo, ok := s.repo.(interface {
 				GetByOriginalURL(originalURL string) (string, error)
 			}); ok {
@@ -71,22 +68,28 @@ func (s *ShortenerService) ShortenURL(longURL string) (string, error) {
 				}
 				return "", &ErrDuplicateURL{ShortID: existingShortID}
 			}
-			// Если репозиторий не поддерживает GetByOriginalURL, возвращаем общую ошибку
 			return "", err
 		}
 		return "", err
 	}
-	
 	return shortID, nil
 }
 
-// GetOriginalURL возвращает оригинальный URL по короткому ID
+// GetOriginalURL возвращает оригинальный URL по короткому ID.
+// Ошибки repository.ErrNotFound и repository.ErrDeleted проверяются в хендлере через errors.Is для выбора status code.
 func (s *ShortenerService) GetOriginalURL(shortID string) (string, error) {
 	if shortID == "" {
 		return "", errors.New("empty short ID")
 	}
-	
 	return s.repo.Get(shortID)
+}
+
+// DeleteUserURLs помечает указанные short URL как удалённые (только принадлежащие userID)
+func (s *ShortenerService) DeleteUserURLs(userID string, shortIDs []string) error {
+	if userID == "" || len(shortIDs) == 0 {
+		return nil
+	}
+	return s.repo.MarkDeleted(userID, shortIDs)
 }
 
 // validateURL проверяет корректность URL
@@ -94,23 +97,23 @@ func (s *ShortenerService) validateURL(urlStr string) error {
 	if urlStr == "" {
 		return errors.New("empty URL")
 	}
-	
+
 	// Проверяем, что это валидный URL
 	parsedURL, err := url.Parse(urlStr)
 	if err != nil {
 		return errors.New("invalid URL format")
 	}
-	
+
 	// URL должен иметь схему (http или https)
 	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
 		return errors.New("URL must have http or https scheme")
 	}
-	
+
 	// URL должен иметь host
 	if parsedURL.Host == "" {
 		return errors.New("URL must have a host")
 	}
-	
+
 	return nil
 }
 
@@ -119,7 +122,7 @@ func (s *ShortenerService) generateShortID() string {
 	// Генерируем 6 байт случайных данных
 	b := make([]byte, 6)
 	rand.Read(b)
-	
+
 	// Кодируем в base64 URL-safe формат и берем первые 8 символов
 	encoded := base64.URLEncoding.EncodeToString(b)
 	// Убираем padding и берем первые 8 символов
@@ -127,13 +130,13 @@ func (s *ShortenerService) generateShortID() string {
 	if len(encoded) > 8 {
 		encoded = encoded[:8]
 	}
-	
+
 	return encoded
 }
 
 // ShortenURLBatch создает короткие идентификаторы для множества URL
-// Принимает map[correlationID]originalURL и возвращает map[correlationID]shortID
-func (s *ShortenerService) ShortenURLBatch(urls map[string]string) (map[string]string, error) {
+// Принимает map[correlationID]originalURL и userID, возвращает map[correlationID]shortID
+func (s *ShortenerService) ShortenURLBatch(urls map[string]string, userID string) (map[string]string, error) {
 	if len(urls) == 0 {
 		return nil, errors.New("empty batch")
 	}
@@ -165,28 +168,27 @@ func (s *ShortenerService) ShortenURLBatch(urls map[string]string) (map[string]s
 		})
 	}
 
-	// Сохраняем все URL в репозиторий
-	// Для PostgreSQL используем batch сохранение в транзакции
-	// Для других репозиториев используем обычный Save
 	if batchRepo, ok := s.repo.(interface {
-		SaveBatch(mappings map[string]string) error
+		SaveBatch(mappings map[string]string, userID string) error
 	}); ok {
-		// Используем batch сохранение
 		batchMappings := make(map[string]string, len(urlsToSave))
 		for _, data := range urlsToSave {
 			batchMappings[data.shortID] = data.originalURL
 		}
-		if err := batchRepo.SaveBatch(batchMappings); err != nil {
+		if err := batchRepo.SaveBatch(batchMappings, userID); err != nil {
 			return nil, fmt.Errorf("failed to save batch: %w", err)
 		}
 	} else {
-		// Используем обычный Save для каждого URL
 		for _, data := range urlsToSave {
-			if err := s.repo.Save(data.shortID, data.originalURL); err != nil {
+			if err := s.repo.Save(data.shortID, data.originalURL, userID); err != nil {
 				return nil, fmt.Errorf("failed to save URL for correlation_id %s: %w", data.correlationID, err)
 			}
 		}
 	}
-
 	return result, nil
+}
+
+// GetUserURLs возвращает все URL, сокращённые пользователем userID
+func (s *ShortenerService) GetUserURLs(userID string) ([]repository.UserURL, error) {
+	return s.repo.GetByUserID(userID)
 }

@@ -2,9 +2,9 @@ package model
 
 // StorageRecord представляет запись в файловом хранилище
 type StorageRecord struct {
-	UUID       string `json:"uuid"`
-	ShortURL   string `json:"short_url"`
+	UUID        string `json:"uuid"`
+	ShortURL    string `json:"short_url"`
 	OriginalURL string `json:"original_url"`
+	UserID      string `json:"user_id"`
+	IsDeleted   bool   `json:"is_deleted"`
 }
-
-

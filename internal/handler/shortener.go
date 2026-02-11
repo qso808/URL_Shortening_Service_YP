@@ -7,6 +7,8 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/qso808/URL_Shortening_Service_YP/internal/middleware"
+	"github.com/qso808/URL_Shortening_Service_YP/internal/repository"
 	"github.com/qso808/URL_Shortening_Service_YP/internal/service"
 )
 
@@ -32,60 +34,75 @@ type BatchShortenResponse struct {
 	ShortURL      string `json:"short_url"`
 }
 
-// ShortenerHandler обрабатывает HTTP запросы для сервиса сокращения URL
-type ShortenerHandler struct {
-	service service.Shortener
-	baseURL string
+// UserURLResponse — элемент ответа GET /api/user/urls
+type UserURLResponse struct {
+	ShortURL    string `json:"short_url"`
+	OriginalURL string `json:"original_url"`
 }
 
-// NewShortenerHandler создает новый экземпляр хэндлера
-func NewShortenerHandler(svc service.Shortener, baseURL string) *ShortenerHandler {
+// DeleteTask — задача на асинхронное удаление URL (fan-in: несколько запросов → один воркер)
+type DeleteTask struct {
+	UserID   string
+	ShortIDs []string
+}
+
+// LogErrorFunc вызывается при ответе 5xx для логирования нештатных ошибок (опционально).
+type LogErrorFunc func(err error, msg string)
+
+// ShortenerHandler обрабатывает HTTP запросы для сервиса сокращения URL
+type ShortenerHandler struct {
+	service    service.Shortener
+	baseURL    string
+	deleteChan chan<- DeleteTask
+	logError   LogErrorFunc
+}
+
+// NewShortenerHandler создает новый экземпляр хэндлера. DELETE всегда поддерживается:
+// при переданном deleteChan удаление выполняется асинхронно, при nil — синхронно (например в тестах).
+// logError при необходимости используется для логирования ответов 5xx.
+func NewShortenerHandler(svc service.Shortener, baseURL string, deleteChan chan<- DeleteTask, logError LogErrorFunc) *ShortenerHandler {
 	return &ShortenerHandler{
-		service: svc,
-		baseURL: baseURL,
+		service:    svc,
+		baseURL:    baseURL,
+		deleteChan: deleteChan,
+		logError:   logError,
 	}
 }
 
 // ShortenURL обрабатывает POST запрос для сокращения URL
 func (h *ShortenerHandler) ShortenURL(w http.ResponseWriter, r *http.Request) {
-	// Проверяем метод
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	
 	// Читаем тело запроса
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		http.Error(w, "Bad Request", http.StatusBadRequest)
+		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 		return
 	}
 	defer r.Body.Close()
-	
+
 	longURL := string(body)
-	
-	// Сокращаем URL через сервис
-	shortID, err := h.service.ShortenURL(longURL)
+	userID := middleware.GetUserID(r.Context())
+
+	shortID, err := h.service.ShortenURL(longURL, userID)
 	if err != nil {
 		// Проверяем, является ли это ошибкой дубликата URL
 		var dupErr *service.ErrDuplicateURL
 		if errors.As(err, &dupErr) {
 			// Формируем короткий URL из существующего shortID
 			shortURL := h.baseURL + "/" + dupErr.ShortID
-			
+
 			// Устанавливаем заголовки и возвращаем ответ с кодом 409 Conflict
 			w.Header().Set("Content-Type", "text/plain")
 			w.WriteHeader(http.StatusConflict)
 			w.Write([]byte(shortURL))
 			return
 		}
-		http.Error(w, "Bad Request", http.StatusBadRequest)
+		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 		return
 	}
-	
+
 	// Формируем короткий URL
 	shortURL := h.baseURL + "/" + shortID
-	
+
 	// Устанавливаем заголовки и возвращаем ответ
 	w.Header().Set("Content-Type", "text/plain")
 	w.WriteHeader(http.StatusCreated)
@@ -94,15 +111,9 @@ func (h *ShortenerHandler) ShortenURL(w http.ResponseWriter, r *http.Request) {
 
 // Redirect обрабатывает GET запрос для редиректа на оригинальный URL
 func (h *ShortenerHandler) Redirect(w http.ResponseWriter, r *http.Request) {
-	// Проверяем метод (для обратной совместимости с тестами)
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	
 	// Извлекаем ID из параметров роутера (chi)
 	shortID := chi.URLParam(r, "id")
-	
+
 	// Если ID не найден в параметрах (для обратной совместимости), пробуем извлечь из пути
 	if shortID == "" {
 		path := r.URL.Path
@@ -111,14 +122,17 @@ func (h *ShortenerHandler) Redirect(w http.ResponseWriter, r *http.Request) {
 		}
 		shortID = path
 	}
-	
-	// Получаем оригинальный URL
+
+	// Получаем оригинальный URL; по типу ошибки выбираем status code (errors.Is)
 	originalURL, err := h.service.GetOriginalURL(shortID)
 	if err != nil {
-		http.Error(w, "Bad Request", http.StatusBadRequest)
+		if errors.Is(err, repository.ErrDeleted) {
+			w.WriteHeader(http.StatusGone)
+			return
+		}
+		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 		return
 	}
-	
 	// Выполняем редирект
 	w.Header().Set("Location", originalURL)
 	w.WriteHeader(http.StatusTemporaryRedirect)
@@ -126,12 +140,6 @@ func (h *ShortenerHandler) Redirect(w http.ResponseWriter, r *http.Request) {
 
 // ShortenURLJSON обрабатывает POST запрос /api/shorten для сокращения URL с JSON форматом
 func (h *ShortenerHandler) ShortenURLJSON(w http.ResponseWriter, r *http.Request) {
-	// Проверяем метод
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	// Проверяем Content-Type
 	if r.Header.Get("Content-Type") != "application/json" {
 		http.Error(w, "Content-Type must be application/json", http.StatusBadRequest)
@@ -141,7 +149,7 @@ func (h *ShortenerHandler) ShortenURLJSON(w http.ResponseWriter, r *http.Request
 	// Читаем тело запроса
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		http.Error(w, "Bad Request", http.StatusBadRequest)
+		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 		return
 	}
 	defer r.Body.Close()
@@ -153,14 +161,13 @@ func (h *ShortenerHandler) ShortenURLJSON(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Проверяем, что URL не пустой
 	if req.URL == "" {
 		http.Error(w, "URL is required", http.StatusBadRequest)
 		return
 	}
+	userID := middleware.GetUserID(r.Context())
 
-	// Сокращаем URL через сервис
-	shortID, err := h.service.ShortenURL(req.URL)
+	shortID, err := h.service.ShortenURL(req.URL, userID)
 	if err != nil {
 		// Проверяем, является ли это ошибкой дубликата URL
 		var dupErr *service.ErrDuplicateURL
@@ -179,12 +186,15 @@ func (h *ShortenerHandler) ShortenURLJSON(w http.ResponseWriter, r *http.Request
 
 			// Кодируем и отправляем JSON ответ
 			if err := json.NewEncoder(w).Encode(response); err != nil {
-				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+				if h.logError != nil {
+					h.logError(err, "ShortenURLJSON: encode conflict response")
+				}
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				return
 			}
 			return
 		}
-		http.Error(w, "Bad Request", http.StatusBadRequest)
+		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 		return
 	}
 
@@ -202,19 +212,16 @@ func (h *ShortenerHandler) ShortenURLJSON(w http.ResponseWriter, r *http.Request
 
 	// Кодируем и отправляем JSON ответ
 	if err := json.NewEncoder(w).Encode(response); err != nil {
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		if h.logError != nil {
+			h.logError(err, "ShortenURLJSON: encode response")
+		}
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
 }
 
 // ShortenURLBatch обрабатывает POST запрос /api/shorten/batch для пакетного сокращения URL
 func (h *ShortenerHandler) ShortenURLBatch(w http.ResponseWriter, r *http.Request) {
-	// Проверяем метод
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	// Проверяем Content-Type
 	if r.Header.Get("Content-Type") != "application/json" {
 		http.Error(w, "Content-Type must be application/json", http.StatusBadRequest)
@@ -224,7 +231,7 @@ func (h *ShortenerHandler) ShortenURLBatch(w http.ResponseWriter, r *http.Reques
 	// Читаем тело запроса
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		http.Error(w, "Bad Request", http.StatusBadRequest)
+		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 		return
 	}
 	defer r.Body.Close()
@@ -251,11 +258,11 @@ func (h *ShortenerHandler) ShortenURLBatch(w http.ResponseWriter, r *http.Reques
 		}
 		urlsMap[req.CorrelationID] = req.OriginalURL
 	}
+	userID := middleware.GetUserID(r.Context())
 
-	// Вызываем сервис для batch сокращения
-	results, err := h.service.ShortenURLBatch(urlsMap)
+	results, err := h.service.ShortenURLBatch(urlsMap, userID)
 	if err != nil {
-		http.Error(w, "Bad Request", http.StatusBadRequest)
+		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 		return
 	}
 
@@ -264,7 +271,10 @@ func (h *ShortenerHandler) ShortenURLBatch(w http.ResponseWriter, r *http.Reques
 	for _, req := range requests {
 		shortID, exists := results[req.CorrelationID]
 		if !exists {
-			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			if h.logError != nil {
+				h.logError(errors.New("shortID not in batch results"), "ShortenURLBatch: missing correlation_id")
+			}
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
 		shortURL := h.baseURL + "/" + shortID
@@ -278,9 +288,91 @@ func (h *ShortenerHandler) ShortenURLBatch(w http.ResponseWriter, r *http.Reques
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 
-	// Кодируем и отправляем JSON ответ
 	if err := json.NewEncoder(w).Encode(responses); err != nil {
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		if h.logError != nil {
+			h.logError(err, "ShortenURLBatch: encode response")
+		}
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
+	}
+}
+
+// GetUserURLs обрабатывает GET /api/user/urls — возвращает все URL, сокращённые аутентифицированным пользователем.
+// 401 — если cookie присутствует, но не содержит валидный user ID.
+// 204 — если у пользователя нет сокращённых URL.
+// 200 — JSON-массив объектов { "short_url": "http://...", "original_url": "http://..." }.
+func (h *ShortenerHandler) GetUserURLs(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.GetUserID(r.Context())
+	if userID == "" {
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+	urls, err := h.service.GetUserURLs(userID)
+	if err != nil {
+		if h.logError != nil {
+			h.logError(err, "GetUserURLs")
+		}
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	if len(urls) == 0 {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	response := make([]UserURLResponse, 0, len(urls))
+	for _, u := range urls {
+		response = append(response, UserURLResponse{
+			ShortURL:    h.baseURL + "/" + u.ShortURL,
+			OriginalURL: u.OriginalURL,
+		})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		if h.logError != nil {
+			h.logError(err, "GetUserURLs: encode response")
+		}
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+}
+
+// DeleteUserURLs обрабатывает DELETE /api/user/urls — асинхронное удаление списка short URL.
+// Тело запроса: JSON-массив идентификаторов, например ["6qxTVvsy", "RTfd56hn"].
+// Ответ при успешном приёме: 202 Accepted. Удаляются только URL, принадлежащие текущему пользователю.
+func (h *ShortenerHandler) DeleteUserURLs(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("Content-Type") != "application/json" {
+		http.Error(w, "Content-Type must be application/json", http.StatusBadRequest)
+		return
+	}
+	userID := middleware.GetUserID(r.Context())
+	if userID == "" {
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		return
+	}
+	defer r.Body.Close()
+	var shortIDs []string
+	if err := json.Unmarshal(body, &shortIDs); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+	ids := make([]string, 0, len(shortIDs))
+	for _, s := range shortIDs {
+		if s != "" {
+			ids = append(ids, s)
+		}
+	}
+	w.WriteHeader(http.StatusAccepted)
+	if h.deleteChan != nil {
+		go func() {
+			h.deleteChan <- DeleteTask{UserID: userID, ShortIDs: ids}
+		}()
+	} else {
+		_ = h.service.DeleteUserURLs(userID, ids)
 	}
 }
