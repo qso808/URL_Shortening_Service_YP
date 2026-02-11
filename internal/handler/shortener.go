@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 
@@ -66,6 +67,18 @@ func (h *ShortenerHandler) ShortenURL(w http.ResponseWriter, r *http.Request) {
 	// Сокращаем URL через сервис
 	shortID, err := h.service.ShortenURL(longURL)
 	if err != nil {
+		// Проверяем, является ли это ошибкой дубликата URL
+		var dupErr *service.ErrDuplicateURL
+		if errors.As(err, &dupErr) {
+			// Формируем короткий URL из существующего shortID
+			shortURL := h.baseURL + "/" + dupErr.ShortID
+			
+			// Устанавливаем заголовки и возвращаем ответ с кодом 409 Conflict
+			w.Header().Set("Content-Type", "text/plain")
+			w.WriteHeader(http.StatusConflict)
+			w.Write([]byte(shortURL))
+			return
+		}
 		http.Error(w, "Bad Request", http.StatusBadRequest)
 		return
 	}
@@ -149,6 +162,28 @@ func (h *ShortenerHandler) ShortenURLJSON(w http.ResponseWriter, r *http.Request
 	// Сокращаем URL через сервис
 	shortID, err := h.service.ShortenURL(req.URL)
 	if err != nil {
+		// Проверяем, является ли это ошибкой дубликата URL
+		var dupErr *service.ErrDuplicateURL
+		if errors.As(err, &dupErr) {
+			// Формируем короткий URL из существующего shortID
+			shortURL := h.baseURL + "/" + dupErr.ShortID
+
+			// Создаем JSON ответ
+			response := ShortenResponse{
+				Result: shortURL,
+			}
+
+			// Устанавливаем заголовки
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+
+			// Кодируем и отправляем JSON ответ
+			if err := json.NewEncoder(w).Encode(response); err != nil {
+				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+				return
+			}
+			return
+		}
 		http.Error(w, "Bad Request", http.StatusBadRequest)
 		return
 	}

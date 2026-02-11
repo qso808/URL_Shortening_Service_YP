@@ -7,7 +7,19 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+
+	"github.com/qso808/URL_Shortening_Service_YP/internal/repository"
 )
+
+// ErrDuplicateURL - ошибка, возникающая при попытке сократить уже существующий URL
+// Содержит существующий shortID
+type ErrDuplicateURL struct {
+	ShortID string
+}
+
+func (e *ErrDuplicateURL) Error() string {
+	return fmt.Sprintf("URL already exists with short ID: %s", e.ShortID)
+}
 
 // ShortenerService содержит бизнес-логику для сокращения URL
 type ShortenerService struct {
@@ -46,6 +58,22 @@ func (s *ShortenerService) ShortenURL(longURL string) (string, error) {
 	
 	// Сохраняем в репозиторий
 	if err := s.repo.Save(shortID, longURL); err != nil {
+		// Проверяем, является ли это ошибкой дубликата URL
+		if err == repository.ErrDuplicateURL {
+			// Получаем существующий shortID по originalURL
+			// Используем type assertion для проверки наличия метода GetByOriginalURL
+			if postgresRepo, ok := s.repo.(interface {
+				GetByOriginalURL(originalURL string) (string, error)
+			}); ok {
+				existingShortID, getErr := postgresRepo.GetByOriginalURL(longURL)
+				if getErr != nil {
+					return "", fmt.Errorf("failed to get existing URL: %w", getErr)
+				}
+				return "", &ErrDuplicateURL{ShortID: existingShortID}
+			}
+			// Если репозиторий не поддерживает GetByOriginalURL, возвращаем общую ошибку
+			return "", err
+		}
 		return "", err
 	}
 	

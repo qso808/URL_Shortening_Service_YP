@@ -18,6 +18,20 @@ cmd/shortener/shortener
 # Dependency directories (remove the comment below to include it)
 vendor/
 
+# Go build cache
+.gocache/
+*.cache
+
 # IDEs directories
 .idea
 .vscode
+.cursor
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+*~
