@@ -63,6 +63,28 @@ func (r *FileRepository) Get(id string) (string, error) {
 	return url, nil
 }
 
+// SaveBatch сохраняет множество URL одним разом
+func (r *FileRepository) SaveBatch(mappings map[string]string) error {
+	if len(mappings) == 0 {
+		return nil
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	// Добавляем все URL в хранилище
+	for shortID, originalURL := range mappings {
+		r.store[shortID] = originalURL
+	}
+
+	// Сохраняем в файл один раз
+	if err := r.saveToFile(); err != nil {
+		return fmt.Errorf("failed to save to file: %w", err)
+	}
+
+	return nil
+}
+
 // loadFromFile загружает данные из файла
 func (r *FileRepository) loadFromFile() error {
 	// Проверяем, существует ли файл
