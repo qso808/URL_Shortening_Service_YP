@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/qso808/URL_Shortening_Service_YP/internal/middleware"
 	"github.com/qso808/URL_Shortening_Service_YP/internal/service"
 )
 
@@ -30,6 +31,12 @@ type BatchShortenRequest struct {
 type BatchShortenResponse struct {
 	CorrelationID string `json:"correlation_id"`
 	ShortURL      string `json:"short_url"`
+}
+
+// UserURLResponse — элемент ответа GET /api/user/urls
+type UserURLResponse struct {
+	ShortURL    string `json:"short_url"`
+	OriginalURL string `json:"original_url"`
 }
 
 // ShortenerHandler обрабатывает HTTP запросы для сервиса сокращения URL
@@ -63,9 +70,9 @@ func (h *ShortenerHandler) ShortenURL(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 	
 	longURL := string(body)
-	
-	// Сокращаем URL через сервис
-	shortID, err := h.service.ShortenURL(longURL)
+	userID := middleware.GetUserID(r.Context())
+
+	shortID, err := h.service.ShortenURL(longURL, userID)
 	if err != nil {
 		// Проверяем, является ли это ошибкой дубликата URL
 		var dupErr *service.ErrDuplicateURL
@@ -153,14 +160,13 @@ func (h *ShortenerHandler) ShortenURLJSON(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Проверяем, что URL не пустой
 	if req.URL == "" {
 		http.Error(w, "URL is required", http.StatusBadRequest)
 		return
 	}
+	userID := middleware.GetUserID(r.Context())
 
-	// Сокращаем URL через сервис
-	shortID, err := h.service.ShortenURL(req.URL)
+	shortID, err := h.service.ShortenURL(req.URL, userID)
 	if err != nil {
 		// Проверяем, является ли это ошибкой дубликата URL
 		var dupErr *service.ErrDuplicateURL
@@ -251,9 +257,9 @@ func (h *ShortenerHandler) ShortenURLBatch(w http.ResponseWriter, r *http.Reques
 		}
 		urlsMap[req.CorrelationID] = req.OriginalURL
 	}
+	userID := middleware.GetUserID(r.Context())
 
-	// Вызываем сервис для batch сокращения
-	results, err := h.service.ShortenURLBatch(urlsMap)
+	results, err := h.service.ShortenURLBatch(urlsMap, userID)
 	if err != nil {
 		http.Error(w, "Bad Request", http.StatusBadRequest)
 		return
@@ -278,8 +284,45 @@ func (h *ShortenerHandler) ShortenURLBatch(w http.ResponseWriter, r *http.Reques
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 
-	// Кодируем и отправляем JSON ответ
 	if err := json.NewEncoder(w).Encode(responses); err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+}
+
+// GetUserURLs обрабатывает GET /api/user/urls — возвращает все URL, сокращённые аутентифицированным пользователем.
+// 401 — если cookie присутствует, но не содержит валидный user ID.
+// 204 — если у пользователя нет сокращённых URL.
+// 200 — JSON-массив объектов { "short_url": "http://...", "original_url": "http://..." }.
+func (h *ShortenerHandler) GetUserURLs(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	userID := middleware.GetUserID(r.Context())
+	if userID == "" {
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+	urls, err := h.service.GetUserURLs(userID)
+	if err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+	if len(urls) == 0 {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	response := make([]UserURLResponse, 0, len(urls))
+	for _, u := range urls {
+		response = append(response, UserURLResponse{
+			ShortURL:    h.baseURL + "/" + u.ShortURL,
+			OriginalURL: u.OriginalURL,
+		})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(w).Encode(response); err != nil {
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}

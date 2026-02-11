@@ -81,27 +81,21 @@ func main() {
 	// Настраиваем роутер с использованием chi
 	router := chi.NewRouter()
 
-	// Добавляем middleware для поддержки gzip (должен быть первым для обработки запросов/ответов)
 	router.Use(customMiddleware.GzipMiddleware)
-
-	// Добавляем кастомный middleware для логирования запросов и ответов
 	router.Use(customMiddleware.RequestLogger(logger))
 	router.Use(middleware.Recoverer)
+	router.Use(customMiddleware.UserCookie(cfg.CookieSecret))
 
-	// GET /ping - проверка соединения с базой данных
 	pingHandler := handler.NewPingHandler(db)
 	router.Get("/ping", pingHandler.Ping)
 
-	// POST / - сокращение URL (text/plain)
 	router.Post("/", shortenerHandler.ShortenURL)
-
-	// POST /api/shorten - сокращение URL (JSON)
 	router.Post("/api/shorten", shortenerHandler.ShortenURLJSON)
-
-	// POST /api/shorten/batch - пакетное сокращение URL (JSON)
 	router.Post("/api/shorten/batch", shortenerHandler.ShortenURLBatch)
 
-	// GET /{id} - редирект на оригинальный URL
+	// GET /api/user/urls — список URL пользователя (до GET /{id}, чтобы не перехватить путь)
+	router.Get("/api/user/urls", shortenerHandler.GetUserURLs)
+
 	router.Get("/{id}", shortenerHandler.Redirect)
 
 	// Создаем HTTP сервер
